@@ -6,6 +6,8 @@ import crypto from 'crypto';
 import cors from 'cors';  
 import { LarkOAuthClient } from './lark/oauth-client.js';
 import { larkConfig, checkRequiredEnvVars } from './config/env.js';
+import { McpServerOptions } from './shared';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 // Check environment variables on startup
 const envCheck = checkRequiredEnvVars();
@@ -358,78 +360,29 @@ async function authenticateToken(req: Request, res: Response, next: NextFunction
 // 存储SSE连接的Map
 const sseConnections = new Map();
 
+// 存储外部传入的 MCP 服务器实例
+let externalMcpServer: McpServer | null = null;
+
 // Handle SSE endpoint for GET - 建立长连接
-async function handleSSEConnection(req: Request, res: Response): Promise<void> {
+async function handleSSEConnection(req: Request, res: Response, mcpServer: McpServer): Promise<void> {
   console.log(`[DEBUG] SSE connection request from client: ${req.user?.client_id}`);
   
   const sessionId = crypto.randomUUID();
   console.log(`[DEBUG] Creating SSE session: ${sessionId}`);
 
   try {
-    // 创建 MCP Server 实例
-    const server = new Server(  
-      {  
-        name: 'oauth-mcp-server',  
-        version: '1.0.0',  
-      },  
-      {  
-        capabilities: {  
-          tools: {},  
-        },  
-      }  
-    );  
-    
-    // 注册工具  
-    server.setRequestHandler(ListToolsRequestSchema, async () => {  
-      console.log('[DEBUG] Received list_tools request');
-      return {  
-        tools: [  
-          {  
-            name: 'echo',  
-            description: 'Echo back the input',  
-            inputSchema: {  
-              type: 'object',  
-              properties: {  
-                message: {  
-                  type: 'string',  
-                  description: 'Message to echo back',  
-                },  
-              },  
-              required: ['message'],  
-            },  
-          },  
-        ],  
-      };  
-    });  
-    
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {  
-      console.log('[DEBUG] Received call_tool request:', request.params.name);
-      if (request.params.name === 'echo') {  
-        return {  
-          content: [  
-            {  
-              type: 'text',  
-              text: `Echo: ${request.params.arguments?.message || 'No message provided'}`,  
-            },  
-          ],  
-        };  
-      } else {  
-        throw new Error(`Unknown tool: ${request.params.name}`);  
-      }  
-    });  
-    
     console.log('[DEBUG] Creating SSE transport');
     
     // 创建 SSE Transport - 让它自己处理响应头
     const transport = new SSEServerTransport('/messages', res);  
     
     // 存储连接信息
-    sseConnections.set(sessionId, { transport, server, response: res, clientId: req.user?.client_id });
+    sseConnections.set(sessionId, { transport, server: mcpServer, response: res, clientId: req.user?.client_id });
     
     console.log('[DEBUG] Connecting MCP server to SSE transport');
     
     // 连接 server 和 transport  
-    await server.connect(transport);  
+    await mcpServer.connect(transport);  
     console.log('[DEBUG] MCP server connected to SSE transport successfully');
 
     // 发送端点信息给客户端
@@ -448,13 +401,8 @@ async function handleSSEConnection(req: Request, res: Response): Promise<void> {
     req.on('close', () => {  
       console.log(`[DEBUG] SSE connection closed for session: ${sessionId}`);
       sseConnections.delete(sessionId);
-      server.close();  
+      // 注意：不要关闭外部传入的 server，因为它可能被其他连接使用
     });
-
-    // Handle server errors
-    server.onerror = (error) => {
-      console.error('[ERROR] MCP Server error:', error);
-    };
     
     // 保持连接活跃
     const keepAlive = setInterval(() => {
@@ -503,7 +451,7 @@ async function handlePostMessage(req: Request, res: Response): Promise<void> {
 }
   
 // MCP SSE 端点 - 只支持 GET 用于建立SSE连接
-app.get('/sse', authenticateToken, handleSSEConnection);
+// 注意：这里将在 initSSEServer 中设置正确的路由
 
 // MCP Messages 端点 - 只支持 POST 用于发送消息  
 app.post('/messages', authenticateToken, handlePostMessage);
@@ -516,16 +464,49 @@ app.options('/sse', (req, res) => {
   res.header('Access-Control-Allow-Credentials', 'true');
   res.sendStatus(200);
 });
+
+// 导出初始化函数，用于替代 sse.ts
+export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): void {
+  // 存储外部传入的 MCP 服务器实例
+  externalMcpServer = mcpServer;
   
-// 启动服务器  
+  // 设置 SSE 路由，使用传入的 MCP 服务器
+  app.get('/sse', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+    if (!externalMcpServer) {
+      res.status(500).json({ error: 'MCP server not initialized' });
+      return;
+    }
+    await handleSSEConnection(req, res, externalMcpServer);
+  });
+
+  // 启动服务器  
+  const port = options.port || 3000;
+  const host = options.host || 'localhost';
+  
+  console.log(`[DEBUG] Starting MCP SSE Server with OAuth on ${host}:${port}`);
+  app.listen(port, host, () => {  
+    console.log(`MCP SSE Server with OAuth running on ${host}:${port}`);  
+    console.log(`OAuth endpoints:`);
+    console.log(`  - Metadata: GET http://${host}:${port}/.well-known/oauth-authorization-server`);  
+    console.log(`  - Register: POST http://${host}:${port}/register`);  
+    console.log(`  - Authorize: GET http://${host}:${port}/authorize`);  
+    console.log(`  - Token: POST http://${host}:${port}/token`);
+    console.log(`  - SSE: GET/POST http://${host}:${port}/sse`);  
+  });
+}
+  
+// 启动服务器 (保留原有逻辑，用于直接运行)
 const PORT = process.env.PORT || 3000;  
-console.log(`[DEBUG] Starting server on port ${PORT}`);
-app.listen(PORT, () => {  
-  console.log(`MCP SSE Server with OAuth running on port ${PORT}`);  
-  console.log(`OAuth endpoints:`);
-  console.log(`  - Metadata: GET http://localhost:${PORT}/.well-known/oauth-authorization-server`);  
-  console.log(`  - Register: POST http://localhost:${PORT}/register`);  
-  console.log(`  - Authorize: GET http://localhost:${PORT}/authorize`);  
-  console.log(`  - Token: POST http://localhost:${PORT}/token`);
-  console.log(`  - SSE: GET/POST http://localhost:${PORT}/sse`);  
-});
+if (require.main === module) {
+  // 只有直接运行此文件时才启动服务器
+  console.log(`[DEBUG] Starting server on port ${PORT}`);
+  app.listen(PORT, () => {  
+    console.log(`MCP SSE Server with OAuth running on port ${PORT}`);  
+    console.log(`OAuth endpoints:`);
+    console.log(`  - Metadata: GET http://localhost:${PORT}/.well-known/oauth-authorization-server`);  
+    console.log(`  - Register: POST http://localhost:${PORT}/register`);  
+    console.log(`  - Authorize: GET http://localhost:${PORT}/authorize`);  
+    console.log(`  - Token: POST http://localhost:${PORT}/token`);
+    console.log(`  - SSE: GET/POST http://localhost:${PORT}/sse`);  
+  });
+}
