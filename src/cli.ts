@@ -42,14 +42,33 @@ program
       }
     }
     const mergedOptions = { ...OAPI_MCP_DEFAULT_ARGS, ...OAPI_MCP_ENV_ARGS, ...fileOptions, ...options };
-    const { mcpServer } = initMcpServer(mergedOptions);
+    
+    // 导入并合并 larkConfig 的值
+    const { larkConfig } = await import('./mcp-server/config/env');
+    
+    // 将 larkConfig 的值合并到 mergedOptions 中
+    const finalOptions = {
+      ...mergedOptions,
+      // 将 larkConfig 的字段映射到 mergedOptions 的字段
+      domain: mergedOptions.domain || larkConfig.baseUrl,
+      appId: mergedOptions.appId || larkConfig.appId,
+      appSecret: mergedOptions.appSecret || larkConfig.appSecret,
+      // 如果 mergedOptions.port 是字符串，转换为数字
+      port: typeof mergedOptions.port === 'string' ? parseInt(mergedOptions.port) : mergedOptions.port
+    };
+    
     console.log('mergedOptions', mergedOptions);
-    if (mergedOptions.mode === 'stdio') {
+    console.log('finalOptions', finalOptions);
+    
+    const { mcpServer, larkClient } = initMcpServer(finalOptions);
+    if (finalOptions.mode === 'stdio') {
       initStdioServer(mcpServer);
-    } else if (mergedOptions.mode === 'sse') {
-      initSSEServer(mcpServer, mergedOptions);
+    } else if (finalOptions.mode === 'sse') {
+      // 传递 larkClient 到 server-lark.ts，以便动态更新用户 token
+      const { initSSEServer } = await import('./mcp-server/server-lark');
+      initSSEServer(mcpServer, finalOptions, larkClient);
     } else {
-      console.error('Invalid mode:', mergedOptions.mode);
+      console.error('Invalid mode:', finalOptions.mode);
       process.exit(1);
     }
   });

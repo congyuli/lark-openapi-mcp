@@ -9,6 +9,17 @@ import { larkConfig, checkRequiredEnvVars } from './config/env';
 import { McpServerOptions } from './shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
+// Check environment variables on startup
+const envCheck = checkRequiredEnvVars();
+if (!envCheck.isValid) {
+  console.error('Missing required environment variables:', envCheck.missingVars);
+  console.error('Please create a .env file with the required variables. See env.example for reference.');
+  process.exit(1);
+}
+
+// Initialize Lark OAuth client
+const larkOAuthClient = new LarkOAuthClient(larkConfig);
+
 // Extend Express Request type to include user
 declare module 'express-serve-static-core' {
   interface Request {
@@ -20,27 +31,9 @@ declare module 'express-serve-static-core' {
 }
 
 // 导出初始化函数，用于替代 sse.ts
-export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): void {
-  const PORT = options.port || 3000;
-  console.log(`[DEBUG] Starting server on port ${PORT}`);
-
-  // Check environment variables on startup
-  const envCheck = checkRequiredEnvVars();
-  if (!envCheck.isValid) {
-    console.error('Missing required environment variables:', envCheck.missingVars);
-    console.error('Please create a .env file with the required variables. See env.example for reference.');
-    process.exit(1);
-  }
-
-  console.log('Lark OAuth configuration loaded:');
-  console.log('- App ID:', larkConfig.appId);
-  console.log('- Redirect URI for internal use:', larkConfig.redirectUri);
-  console.log('- Base URL:', larkConfig.baseUrl);
-
-  // Initialize Lark OAuth client
-  const larkOAuthClient = new LarkOAuthClient(larkConfig);
-
+export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, larkClient?: any): void {
   const app = express();
+  const PORT = options.port || 3000;
 
   // Enable CORS for all routes
   app.use(
@@ -59,14 +52,13 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
   app.use((req, res, next) => {
     console.log(`[REQUEST] ${new Date().toISOString()} - ${req.method} ${req.path}`);
     if (Object.keys(req.query).length > 0) {
-      console.log(`[REQUEST] Query params:`, req.query);
+      console.log(`[REQUEST] Query parameters:`, req.query);
     }
     next();
   });
 
   // OAuth 存储 (生产环境请使用数据库)
   const clients = new Map();
-  const tokens = new Map();
 
   // 添加健康检查端点
   app.get('/health', (req, res) => {
@@ -117,12 +109,6 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
 
   // OAuth 授权端点
   app.get('/authorize', (req: Request, res: Response): void => {
-    console.log('\n============================================');
-    console.log(`[AUTHORIZE] 📥 New authorization request received!`);
-    console.log(`[AUTHORIZE] ⏰ Timestamp: ${new Date().toISOString()}`);
-    console.log(`[AUTHORIZE] 🌐 Full URL: ${req.protocol}://${req.get('host')}${req.originalUrl}`);
-    console.log('============================================\n');
-
     const { client_id, redirect_uri, code_challenge, response_type, state, scope } = req.query;
 
     console.log(`[DEBUG] Authorization request from mcp-remote:`);
@@ -209,9 +195,6 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
       });
       const larkScopes = larkConfig.scopes.length > 0 ? larkConfig.scopes.join(' ') : 'contact:user.id:readonly'; // Use minimal scope for testing
 
-      console.log(`[DEBUG] Using Lark scope from config: ${larkScopes}`);
-      console.log(`[DEBUG] Note: Scope source: ${larkConfig.scopes.length > 0 ? 'larkConfig' : 'default fallback'}`);
-
       // Construct Lark's actual authorization URL
       // Use mcp-remote's redirect_uri so Lark redirects directly to mcp-remote
       const larkAuthUrl = larkOAuthClient.getAuthorizationUrl({
@@ -239,7 +222,7 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
   app.post('/token', async (req: Request, res: Response): Promise<void> => {
     console.log(`[DEBUG] User token request body:`, req.body);
 
-    const { grant_type, code, client_id, code_verifier } = req.body;
+    const { grant_type, code, client_id, code_verifier, refresh_token } = req.body;
 
     console.log(`[DEBUG] User token request from mcp-remote:`);
     console.log(`  - grant_type: ${grant_type}`);
@@ -250,21 +233,13 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
       console.log(`[DEBUG] Exchanging Lark authorization code for user token (u- format)...`);
 
       try {
-        // Get the client info to determine the correct redirect_uri used during authorization
-        const client = clients.get(client_id as string);
-
         // Use LarkOAuthClient to exchange the Lark authorization code for user token (u- format)
         const tokenData = await larkOAuthClient.exchangeCodeForUserTokens(code);
-
-        console.log('[DEBUG] Successfully exchanged Lark code for user token (u- format)');
-        console.log(`[DEBUG] Token data:`, {
-          access_token: tokenData.access_token?.substring(0, 20) + '...',
-          refresh_token: tokenData.refresh_token?.substring(0, 20) + '...',
-          token_type: tokenData.token_type,
-          expires_in: tokenData.expires_in,
-          refresh_expires_in: tokenData.refresh_expires_in,
-          scope: tokenData.scope,
-        });
+        // Calculate expires_at based on expires_in
+        const now = Math.floor(Date.now() / 1000); // Current time in seconds
+        const expires_at = now + (tokenData.expires_in || 7200); // Default to 7200 if expires_in not provided
+        // Convert expires_at to ISO string format for consistent date handling
+        tokenData.expires_at = new Date(expires_at * 1000).toISOString();
 
         // Return the complete token data to mcp-remote
         const responseToMcpRemote = {
@@ -272,7 +247,7 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
           refresh_token: tokenData.refresh_token,
           token_type: tokenData.token_type || 'Bearer',
           expires_in: tokenData.expires_in || 7200,
-          refresh_expires_in: tokenData.refresh_expires_in,
+          expires_at: tokenData.expires_at,
           scope: tokenData.scope,
         };
 
@@ -281,7 +256,7 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
           refresh_token: responseToMcpRemote.refresh_token?.substring(0, 20) + '...',
           token_type: responseToMcpRemote.token_type,
           expires_in: responseToMcpRemote.expires_in,
-          refresh_expires_in: responseToMcpRemote.refresh_expires_in,
+          expires_at: responseToMcpRemote.expires_at,
           scope: responseToMcpRemote.scope,
         });
 
@@ -291,6 +266,53 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
         res.status(400).json({
           error: 'invalid_grant',
           error_description: error instanceof Error ? error.message : 'User token exchange failed',
+        });
+      }
+    } else if (grant_type === 'refresh_token') {
+      console.log(`  - refresh_token: ${refresh_token ? refresh_token.substring(0, 20) + '...' : 'undefined'}`);
+      console.log(`[DEBUG] Refreshing Lark user token (u- format)...`);
+
+      if (!refresh_token) {
+        res.status(400).json({
+          error: 'invalid_request',
+          error_description: 'refresh_token parameter is required',
+        });
+        return;
+      }
+
+      try {
+        // Use LarkOAuthClient to refresh the user token
+        const refreshedTokenData = await larkOAuthClient.refreshTokens(refresh_token);
+
+        // Calculate expires_at for refreshed token
+        const now = Math.floor(Date.now() / 1000);
+        const expires_at = now + (refreshedTokenData.data.expires_in || 7200);
+
+        // Return the refreshed token data to mcp-remote
+        const responseToMcpRemote = {
+          access_token: refreshedTokenData.data.access_token,
+          refresh_token: refreshedTokenData.data.refresh_token,
+          token_type: refreshedTokenData.data.token_type || 'Bearer',
+          expires_in: refreshedTokenData.data.expires_in || 7200,
+          expires_at: new Date(expires_at * 1000).toISOString(),
+          scope: refreshedTokenData.data.scope,
+        };
+
+        console.log('[DEBUG] Sending refreshed token data to mcp-remote:', {
+          access_token: responseToMcpRemote.access_token?.substring(0, 20) + '...',
+          refresh_token: responseToMcpRemote.refresh_token?.substring(0, 20) + '...',
+          token_type: responseToMcpRemote.token_type,
+          expires_in: responseToMcpRemote.expires_in,
+          expires_at: responseToMcpRemote.expires_at,
+          scope: responseToMcpRemote.scope,
+        });
+
+        res.json(responseToMcpRemote);
+      } catch (error) {
+        console.error('[ERROR] Failed to refresh Lark user token:', error);
+        res.status(400).json({
+          error: 'invalid_grant',
+          error_description: error instanceof Error ? error.message : 'Token refresh failed',
         });
       }
     } else {
@@ -310,13 +332,6 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
     const token = authHeader.substring(7);
 
     try {
-      console.log(`[DEBUG] Validating Lark access token: ${token.substring(0, 20)}...`);
-
-      // For now, we'll do a simple validation by trying to get user info with the token
-      // In a production environment, you might want to validate the JWT signature if Lark provides JWKS
-      // or cache token validation results to avoid repeated API calls
-
-      // Try to get user info to validate the token
       const response = await fetch(`${larkConfig.baseUrl}/open-apis/authen/v1/user_info`, {
         method: 'GET',
         headers: {
@@ -339,12 +354,12 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
         return;
       }
 
-      console.log(`[DEBUG] Lark token validated successfully for user: ${data.data?.name || 'unknown'}`);
-
       // Set user information from Lark response
       req.user = {
         client_id: 'lark_user', // Since we're proxying Lark, we don't have a traditional client_id
         scope: 'mcp',
+        // 存储验证成功的 token，供 MCP 工具使用
+        accessToken: token,
       } as any;
 
       // Add Lark-specific properties
@@ -364,27 +379,82 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
   // 存储外部传入的 MCP 服务器实例
   let externalMcpServer: McpServer | null = null;
 
-  // Handle SSE endpoint for GET - 建立长连接
-  async function handleSSEConnection(req: Request, res: Response, mcpServer: McpServer): Promise<void> {
-    console.log(`[DEBUG] SSE connection request from client: ${req.user?.client_id}`);
+  // 存储 LarkClient 实例，用于动态更新用户 token
+  let globalLarkClient: any = null;
 
+  // Handle SSE endpoint for POST - 建立长连接
+  async function handleSSEConnection(req: Request, res: Response): Promise<void> {
     const sessionId = crypto.randomUUID();
     console.log(`[DEBUG] Creating SSE session: ${sessionId}`);
 
     try {
-      console.log('[DEBUG] Creating SSE transport');
+      // 创建 MCP Server 实例（使用 Server 而不是 McpServer）
+      const server = new Server(
+        {
+          name: 'lark-oauth-mcp-server',
+          version: '1.0.0',
+        },
+        {
+          capabilities: {
+            tools: {},
+          },
+        },
+      );
+
+      // 注册工具处理器
+      server.setRequestHandler(ListToolsRequestSchema, async () => {
+        console.log('[DEBUG] ✅ Received list_tools request');
+
+        const tools = [];
+
+        // 添加测试工具
+        tools.push({
+          name: 'echo',
+          description: 'Echo back the input',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              message: {
+                type: 'string',
+                description: 'Message to echo back',
+              },
+            },
+            required: ['message'],
+          },
+        });
+
+        return { tools };
+      });
+
+      server.setRequestHandler(CallToolRequestSchema, async (request) => {
+        console.log('[DEBUG] ✅ Received call_tool request:', request.params.name);
+
+        // 处理测试工具
+        if (request.params.name === 'echo') {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Echo: ${request.params.arguments?.message || 'No message provided'}`,
+              },
+            ],
+          };
+        }
+
+        throw new Error(`Unknown tool: ${request.params.name}`);
+      });
 
       // 创建 SSE Transport - 让它自己处理响应头
       const transport = new SSEServerTransport('/messages', res);
 
       // 存储连接信息
-      sseConnections.set(sessionId, { transport, server: mcpServer, response: res, clientId: req.user?.client_id });
+      sseConnections.set(sessionId, { transport, server, response: res, clientId: req.user?.client_id });
 
-      console.log('[DEBUG] Connecting MCP server to SSE transport');
+      console.log(`[DEBUG] Connecting MCP server to SSE transport (active connections: ${sseConnections.size})`);
 
       // 连接 server 和 transport
-      await mcpServer.connect(transport);
-      console.log('[DEBUG] MCP server connected to SSE transport successfully');
+      await server.connect(transport);
+      console.log(`[DEBUG] MCP server connected to SSE transport successfully for session: ${sessionId}`);
 
       // 发送端点信息给客户端
       res.write(`event: endpoint\n`);
@@ -402,12 +472,46 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
 
       // 处理连接关闭
       req.on('close', () => {
-        console.log(`[DEBUG] SSE connection closed for session: ${sessionId}`);
+        console.log(
+          `[DEBUG] SSE connection closed for session: ${sessionId} (remaining connections: ${sseConnections.size - 1})`,
+        );
         sseConnections.delete(sessionId);
-        // 注意：不要关闭外部传入的 server，因为它可能被其他连接使用
+        server.close();
       });
 
-      // 保持连接活跃
+      // 处理错误
+      req.on('error', (error: any) => {
+        // 对常见的网络断开错误进行优雅处理
+        if (error.code === 'ECONNRESET' || error.code === 'ECONNABORTED') {
+          console.log(
+            `[INFO] SSE connection closed by client for session ${sessionId} (${error.code}) (remaining connections: ${sseConnections.size - 1})`,
+          );
+        } else {
+          console.error(`[ERROR] SSE connection error for session ${sessionId}:`, error);
+        }
+        sseConnections.delete(sessionId);
+        server.close();
+      });
+
+      res.on('error', (error: any) => {
+        // 对常见的网络断开错误进行优雅处理
+        if (error.code === 'ECONNRESET' || error.code === 'ECONNABORTED') {
+          console.log(
+            `[INFO] SSE response connection closed by client for session ${sessionId} (${error.code}) (remaining connections: ${sseConnections.size - 1})`,
+          );
+        } else {
+          console.error(`[ERROR] SSE response error for session ${sessionId}:`, error);
+        }
+        sseConnections.delete(sessionId);
+        server.close();
+      });
+
+      // Handle server errors
+      server.onerror = (error) => {
+        console.error('[ERROR] MCP Server error:', error);
+      };
+
+      // 保持连接活跃 - 减少 ping 频率以避免过多的网络活动
       const keepAlive = setInterval(() => {
         if (res.writable) {
           res.write(`event: ping\n`);
@@ -415,8 +519,9 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
         } else {
           clearInterval(keepAlive);
           sseConnections.delete(sessionId);
+          server.close();
         }
-      }, 15000); // 每15秒发送一次ping
+      }, 30000); // 每30秒发送一次ping，减少网络负载
     } catch (error) {
       console.error('[ERROR] Failed to connect MCP server to SSE transport:', error);
       if (!res.headersSent) {
@@ -452,7 +557,7 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
     }
   }
 
-  // MCP SSE 端点 - 只支持 GET 用于建立SSE连接
+  // MCP SSE 端点 - 只支持 POST 用于建立SSE连接
   // 注意：这里将在 initSSEServer 中设置正确的路由
 
   // MCP Messages 端点 - 只支持 POST 用于发送消息
@@ -470,37 +575,39 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions): 
   // 存储外部传入的 MCP 服务器实例
   externalMcpServer = mcpServer;
 
-  // 设置 SSE 路由，使用传入的 MCP 服务器
-  app.get('/sse', authenticateToken, async (req: Request, res: Response): Promise<void> => {
-    if (!externalMcpServer) {
-      res.status(500).json({ error: 'MCP server not initialized' });
-      return;
+  // 尝试获取 MCP server 的内部状态（如果可能）
+  if (mcpServer) {
+    try {
+      // 检查 server 的注册状态
+      const serverInternal = mcpServer as any;
+      const toolCount = Object.keys(serverInternal._registeredTools || {}).length;
+      const resourceCount = Object.keys(serverInternal._registeredResources || {}).length;
+      console.log(`[DEBUG] MCP Server status:`);
+      console.log(`  - Registered tools: ${toolCount}`);
+      console.log(`  - Registered resources: ${resourceCount}`);
+
+      if (toolCount > 0) {
+        console.log(`  - Tool names:`, Object.keys(serverInternal._registeredTools || {}));
+      }
+    } catch (error) {
+      console.log(`[DEBUG] Could not inspect MCP server internals:`, error);
     }
-    await handleSSEConnection(req, res, externalMcpServer);
-  });
+  }
+
+// MCP SSE 端点 - 只支持 GET 用于建立SSE连接
+app.get('/sse', authenticateToken, handleSSEConnection);
 
   // 启动服务器
-  const port = options.port || 3000;
   const host = options.host || 'localhost';
 
-  console.log(`[DEBUG] Starting MCP SSE Server with OAuth on ${host}:${port}`);
-  app.listen(port, host, () => {
-    console.log(`MCP SSE Server with OAuth running on ${host}:${port}`);
+  console.log(`[DEBUG] Starting MCP SSE Server with OAuth on ${host}:${PORT}`);
+  app.listen(PORT, host, () => {
+    console.log(`MCP SSE Server with OAuth running on ${host}:${PORT}`);
     console.log(`OAuth endpoints:`);
-    console.log(`  - Metadata: GET http://${host}:${port}/.well-known/oauth-authorization-server`);
-    console.log(`  - Register: POST http://${host}:${port}/register`);
-    console.log(`  - Authorize: GET http://${host}:${port}/authorize`);
-    console.log(`  - Token: POST http://${host}:${port}/token`);
-    console.log(`  - SSE: GET/POST http://${host}:${port}/sse`);
-  });
-
-  app.listen(PORT, () => {
-    console.log(`MCP SSE Server with OAuth running on port ${PORT}`);
-    console.log(`OAuth endpoints:`);
-    console.log(`  - Metadata: GET http://localhost:${PORT}/.well-known/oauth-authorization-server`);
-    console.log(`  - Register: POST http://localhost:${PORT}/register`);
-    console.log(`  - Authorize: GET http://localhost:${PORT}/authorize`);
-    console.log(`  - Token: POST http://localhost:${PORT}/token`);
-    console.log(`  - SSE: GET/POST http://localhost:${PORT}/sse`);
+    console.log(`  - Metadata: GET http://${host}:${PORT}/.well-known/oauth-authorization-server`);
+    console.log(`  - Register: POST http://${host}:${PORT}/register`);
+    console.log(`  - Authorize: GET http://${host}:${PORT}/authorize`);
+    console.log(`  - Token: POST http://${host}:${PORT}/token`);
+    console.log(`  - SSE: POST http://${host}:${PORT}/sse`);
   });
 }
