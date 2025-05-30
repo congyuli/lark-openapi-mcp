@@ -1,6 +1,5 @@
 import express, { Request, Response } from 'express';
 import { createServer, Server } from 'http';
-import open from 'open';
 import crypto from 'crypto';
 import { LarkOAuthConfig, LarkTokenResponse, LarkUserInfo, OAuthResult } from './types.js';
 
@@ -40,7 +39,7 @@ export class LarkOAuthClient {
           const authUrl = this.buildAuthUrl(state);
           console.log('Opening browser for Lark OAuth...');
           console.log('Auth URL:', authUrl);
-          return open(authUrl);
+          return import('open').then(({ default: open }) => open(authUrl));
         })
         .catch(reject);
     });
@@ -478,7 +477,7 @@ export class LarkOAuthClient {
           const authUrl = this.buildAuthUrl(state);
           console.log('Opening browser for Lark OAuth (User Token)...');
           console.log('Auth URL:', authUrl);
-          return open(authUrl);
+          return import('open').then(({ default: open }) => open(authUrl));
         })
         .catch(reject);
     });

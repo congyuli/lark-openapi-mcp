@@ -43,6 +43,7 @@ program
     }
     const mergedOptions = { ...OAPI_MCP_DEFAULT_ARGS, ...OAPI_MCP_ENV_ARGS, ...fileOptions, ...options };
     const { mcpServer } = initMcpServer(mergedOptions);
+    console.log('mergedOptions', mergedOptions);
     if (mergedOptions.mode === 'stdio') {
       initStdioServer(mcpServer);
     } else if (mergedOptions.mode === 'sse') {
