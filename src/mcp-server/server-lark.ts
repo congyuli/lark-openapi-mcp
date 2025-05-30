@@ -109,6 +109,13 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
 
   // OAuth 授权端点
   app.get('/authorize', (req: Request, res: Response): void => {
+    // 打印OAuth授权请求的头部信息
+    console.log(`[DEBUG] === OAuth Authorize Headers ===`);
+    console.log(`[DEBUG] OAuth Request URL: ${req.method} ${req.url}`);
+    console.log(`[DEBUG] OAuth Request Headers:`, JSON.stringify(req.headers, null, 2));
+    console.log(`[DEBUG] OAuth Query Parameters:`, req.query);
+    console.log(`[DEBUG] === End OAuth Authorize Headers ===`);
+    
     const { client_id, redirect_uri, code_challenge, response_type, state, scope } = req.query;
 
     console.log(`[DEBUG] Authorization request from mcp-remote:`);
@@ -220,6 +227,14 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
 
   // OAuth 用户令牌端点 (获取 u- 格式的用户令牌)
   app.post('/token', async (req: Request, res: Response): Promise<void> => {
+    // 打印OAuth令牌请求的头部信息
+    console.log(`[DEBUG] === OAuth Token Headers ===`);
+    console.log(`[DEBUG] Token Request URL: ${req.method} ${req.url}`);
+    console.log(`[DEBUG] Token Request Headers:`, JSON.stringify(req.headers, null, 2));
+    console.log(`[DEBUG] Token Authorization: ${req.headers.authorization || 'NOT_FOUND'}`);
+    console.log(`[DEBUG] Token Request Body:`, req.body);
+    console.log(`[DEBUG] === End OAuth Token Headers ===`);
+    
     console.log(`[DEBUG] User token request body:`, req.body);
 
     const { grant_type, code, client_id, code_verifier, refresh_token } = req.body;
@@ -322,9 +337,32 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
 
   // 验证 Lark Bearer Token 的中间件
   async function authenticateToken(req: Request, res: Response, next: NextFunction): Promise<void> {
+    // 打印所有请求头
+    console.log(`[DEBUG] === Request Headers Debug ===`);
+    console.log(`[DEBUG] Request URL: ${req.method} ${req.url}`);
+    console.log(`[DEBUG] Request Headers:`, JSON.stringify(req.headers, null, 2));
+    
+    // 提取和打印Authorization头
     const authHeader = req.headers.authorization;
+    console.log(`[DEBUG] Authorization Header: ${authHeader || 'NOT_FOUND'}`);
+    
+    if (authHeader) {
+      if (authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        console.log(`[DEBUG] Extracted Bearer Token: ${token.substring(0, 20)}...${token.substring(token.length - 10)}`);
+      } else {
+        console.log(`[DEBUG] Authorization header does not start with 'Bearer '`);
+      }
+    }
+    
+    // 打印其他可能相关的头
+    console.log(`[DEBUG] Content-Type: ${req.headers['content-type'] || 'NOT_SET'}`);
+    console.log(`[DEBUG] User-Agent: ${req.headers['user-agent'] || 'NOT_SET'}`);
+    console.log(`[DEBUG] MCP-Protocol-Version: ${req.headers['mcp-protocol-version'] || 'NOT_SET'}`);
+    console.log(`[DEBUG] === End Headers Debug ===`);
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log(`[DEBUG] Authentication failed: Missing or invalid Authorization header`);
       res.status(401).json({ error: 'unauthorized', error_description: 'Bearer token required' });
       return;
     }
@@ -366,6 +404,15 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
       (req.user as any).lark_user_id = data.data?.sub;
       (req.user as any).lark_user_name = data.data?.name;
 
+      // 更新 larkClient 的用户访问令牌
+      if (globalLarkClient && globalLarkClient.updateUserAccessToken) {
+        console.log(`[DEBUG] Updating larkClient with user access token: ${token.substring(0, 20)}...${token.substring(token.length - 10)}`);
+        globalLarkClient.updateUserAccessToken(token);
+        console.log(`[DEBUG] ✅ LarkClient user access token updated successfully`);
+      } else {
+        console.log(`[DEBUG] ⚠️  No globalLarkClient available to update token`);
+      }
+
       next();
     } catch (error) {
       console.error('[ERROR] Token validation error:', error);
@@ -379,13 +426,32 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
   // 存储外部传入的 MCP 服务器实例
   let externalMcpServer: McpServer | null = null;
 
-  // 存储 LarkClient 实例，用于动态更新用户 token
+  // 存储外部传入的 LarkClient 实例
   let globalLarkClient: any = null;
 
   // Handle SSE endpoint for POST - 建立长连接
   async function handleSSEConnection(req: Request, res: Response): Promise<void> {
     const sessionId = crypto.randomUUID();
     console.log(`[DEBUG] Creating SSE session: ${sessionId}`);
+    
+    // 打印SSE连接的请求头
+    console.log(`[DEBUG] === SSE Connection Headers ===`);
+    console.log(`[DEBUG] SSE Request URL: ${req.method} ${req.url}`);
+    console.log(`[DEBUG] SSE Request Headers:`, JSON.stringify(req.headers, null, 2));
+    console.log(`[DEBUG] SSE Authorization: ${req.headers.authorization || 'NOT_FOUND'}`);
+    console.log(`[DEBUG] User Info:`, req.user ? {
+      client_id: req.user.client_id,
+      lark_user_id: (req.user as any).lark_user_id,
+      lark_user_name: (req.user as any).lark_user_name
+    } : 'NOT_AUTHENTICATED');
+    console.log(`[DEBUG] === End SSE Headers ===`);
+
+    // 确保larkClient有最新的用户token
+    if (req.user && (req.user as any).accessToken && globalLarkClient && globalLarkClient.updateUserAccessToken) {
+      const currentToken = (req.user as any).accessToken;
+      console.log(`[DEBUG] Updating larkClient token in SSE connection: ${currentToken.substring(0, 20)}...${currentToken.substring(currentToken.length - 10)}`);
+      globalLarkClient.updateUserAccessToken(currentToken);
+    }
 
     try {
       // 使用传入的 mcpServer 而不是创建新的 Server 实例
@@ -483,6 +549,27 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
   async function handlePostMessage(req: Request, res: Response): Promise<void> {
     const sessionId = req.query.sessionId as string;
     console.log(`[DEBUG] Received POST message for session: ${sessionId}`);
+    
+    // 打印POST消息的请求头
+    console.log(`[DEBUG] === POST Message Headers ===`);
+    console.log(`[DEBUG] POST Request URL: ${req.method} ${req.url}`);
+    console.log(`[DEBUG] POST Query Parameters:`, req.query);
+    console.log(`[DEBUG] POST Request Headers:`, JSON.stringify(req.headers, null, 2));
+    console.log(`[DEBUG] POST Authorization: ${req.headers.authorization || 'NOT_FOUND'}`);
+    console.log(`[DEBUG] POST Body Preview:`, req.body ? JSON.stringify(req.body).substring(0, 200) + '...' : 'NO_BODY');
+    console.log(`[DEBUG] User Info:`, req.user ? {
+      client_id: req.user.client_id,
+      lark_user_id: (req.user as any).lark_user_id,
+      lark_user_name: (req.user as any).lark_user_name
+    } : 'NOT_AUTHENTICATED');
+    console.log(`[DEBUG] === End POST Headers ===`);
+
+    // 确保larkClient有最新的用户token
+    if (req.user && (req.user as any).accessToken && globalLarkClient && globalLarkClient.updateUserAccessToken) {
+      const currentToken = (req.user as any).accessToken;
+      console.log(`[DEBUG] Updating larkClient token in POST message: ${currentToken.substring(0, 20)}...${currentToken.substring(currentToken.length - 10)}`);
+      globalLarkClient.updateUserAccessToken(currentToken);
+    }
 
     if (!sessionId) {
       res.status(400).json({ error: 'Missing sessionId parameter' });
@@ -523,6 +610,18 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
 
   // 存储外部传入的 MCP 服务器实例
   externalMcpServer = mcpServer;
+
+  // 存储外部传入的 LarkClient 实例
+  globalLarkClient = larkClient;
+  
+  console.log(`[DEBUG] Server initialization:`);
+  console.log(`  - MCP Server: ${externalMcpServer ? 'Available' : 'Not Available'}`);
+  console.log(`  - Lark Client: ${globalLarkClient ? 'Available' : 'Not Available'}`);
+  if (globalLarkClient && globalLarkClient.updateUserAccessToken) {
+    console.log(`  - LarkClient updateUserAccessToken method: Available`);
+  } else {
+    console.log(`  - LarkClient updateUserAccessToken method: Not Available`);
+  }
 
   // 尝试获取 MCP server 的内部状态（如果可能）
   if (mcpServer) {
