@@ -388,61 +388,15 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
     console.log(`[DEBUG] Creating SSE session: ${sessionId}`);
 
     try {
-      // 创建 MCP Server 实例（使用 Server 而不是 McpServer）
-      const server = new Server(
-        {
-          name: 'lark-oauth-mcp-server',
-          version: '1.0.0',
-        },
-        {
-          capabilities: {
-            tools: {},
-          },
-        },
-      );
+      // 使用传入的 mcpServer 而不是创建新的 Server 实例
+      if (!externalMcpServer) {
+        console.error('[ERROR] No MCP server instance available');
+        res.status(500).json({ error: 'No MCP server available' });
+        return;
+      }
 
-      // 注册工具处理器
-      server.setRequestHandler(ListToolsRequestSchema, async () => {
-        console.log('[DEBUG] ✅ Received list_tools request');
-
-        const tools = [];
-
-        // 添加测试工具
-        tools.push({
-          name: 'echo',
-          description: 'Echo back the input',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              message: {
-                type: 'string',
-                description: 'Message to echo back',
-              },
-            },
-            required: ['message'],
-          },
-        });
-
-        return { tools };
-      });
-
-      server.setRequestHandler(CallToolRequestSchema, async (request) => {
-        console.log('[DEBUG] ✅ Received call_tool request:', request.params.name);
-
-        // 处理测试工具
-        if (request.params.name === 'echo') {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Echo: ${request.params.arguments?.message || 'No message provided'}`,
-              },
-            ],
-          };
-        }
-
-        throw new Error(`Unknown tool: ${request.params.name}`);
-      });
+      // 获取传入的 mcpServer 实例
+      const server = externalMcpServer;
 
       // 创建 SSE Transport - 让它自己处理响应头
       const transport = new SSEServerTransport('/messages', res);
@@ -476,7 +430,7 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
           `[DEBUG] SSE connection closed for session: ${sessionId} (remaining connections: ${sseConnections.size - 1})`,
         );
         sseConnections.delete(sessionId);
-        server.close();
+        // 注意：不要调用 server.close()，因为这是共享的 mcpServer 实例
       });
 
       // 处理错误
@@ -490,7 +444,7 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
           console.error(`[ERROR] SSE connection error for session ${sessionId}:`, error);
         }
         sseConnections.delete(sessionId);
-        server.close();
+        // 注意：不要调用 server.close()，因为这是共享的 mcpServer 实例
       });
 
       res.on('error', (error: any) => {
@@ -503,13 +457,8 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
           console.error(`[ERROR] SSE response error for session ${sessionId}:`, error);
         }
         sseConnections.delete(sessionId);
-        server.close();
+        // 注意：不要调用 server.close()，因为这是共享的 mcpServer 实例
       });
-
-      // Handle server errors
-      server.onerror = (error) => {
-        console.error('[ERROR] MCP Server error:', error);
-      };
 
       // 保持连接活跃 - 减少 ping 频率以避免过多的网络活动
       const keepAlive = setInterval(() => {
@@ -519,7 +468,7 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
         } else {
           clearInterval(keepAlive);
           sseConnections.delete(sessionId);
-          server.close();
+          // 注意：不要调用 server.close()，因为这是共享的 mcpServer 实例
         }
       }, 30000); // 每30秒发送一次ping，减少网络负载
     } catch (error) {
