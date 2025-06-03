@@ -422,7 +422,7 @@ mcp-remote客户端                    Lark MCP SSE服务器                    
       | 13. 建立SSE长连接                    |                                    |                              |
       |    Content-Type: text/event-stream |                                    |                              |
       |<---------------------------------- |                                    |                              |
-═══════════════════════ MCP 工具调用阶段 ═══════════════════════                                              |
+═══════════════════════ MCP 工具调用阶段 ═══════════════════════                                                 |
       |                                    |                                    |                              |
       | 14. POST /messages?sessionId=xxx   |                                    |                              |
       |     Authorization: Bearer <token>  |                                    |                              |
@@ -477,19 +477,19 @@ mcp-remote客户端                    Lark MCP SSE服务器                    
       |     refresh_token=xxx              |                                    |                              |
       |----------------------------------> |                                    |                              |
       |                                    |                                    |                              |
-      |                                    | 20. 向Lark Server刷新token         |                              |
+      |                                    | 20. 向Lark Server刷新token          |                              |
       |                                    |     POST /oauth/v2/refresh_token   |                              |
       |                                    |     refresh_token=xxx&             |                              |
       |                                    |     client_id=xxx&                 |                              |
       |                                    |     client_secret=xxx              |                              |
-      |                                    |------------------------------------>|                              |
+      |                                    |----------------------------------->|                              |
       |                                    |                                    |                              |
       |                                    | 21. 返回新的access_token            |                              |
       |                                    |     {                              |                              |
       |                                    |       access_token: "u-new...",    |                              |
       |                                    |       expires_in: 7200             |                              |
       |                                    |     }                              |                              |
-      |                                    |<------------------------------------|                              |
+      |                                    |<-----------------------------------|                              |
       |                                    |                                    |                              |
       | 22. 返回新的access_token            |                                    |                              |
       |     {                              |                                    |                              |
@@ -502,6 +502,6 @@ mcp-remote客户端                    Lark MCP SSE服务器                    
       |                                    |                                    |                              |
       | 24. 后续请求使用新token              |                                    |                              |
       |     Authorization: Bearer <new_token>                                   |                              |
-      |----------------------------------> |                                    |      
+      |----------------------------------> |                                    |                              |
 
 ```      
