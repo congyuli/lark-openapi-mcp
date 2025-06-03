@@ -17,7 +17,6 @@ if (result.error) {
 const envSchema = z.object({
   LARK_APP_ID: z.string().min(1, "LARK_APP_ID is required").optional(),
   LARK_APP_SECRET: z.string().min(1, "LARK_APP_SECRET is required").optional(),
-  LARK_REDIRECT_URI: z.string().url("LARK_REDIRECT_URI must be a valid URL").default("http://localhost:3000/callback"),
   LARK_BASE_URL: z.string().url("LARK_BASE_URL must be a valid URL").default("https://open.feishu.cn"),
   LARK_SCOPES: z.string().default(""),
   PORT: z.string().transform(val => parseInt(val, 10)).default("3000")
@@ -28,7 +27,6 @@ function validateEnv() {
   console.log('🔍 Checking environment variables...');
   console.log('LARK_APP_ID:', process.env.LARK_APP_ID ? `✅ Set (${process.env.LARK_APP_ID})` : '❌ Missing');
   console.log('LARK_APP_SECRET:', process.env.LARK_APP_SECRET ? `✅ Set (${process.env.LARK_APP_SECRET.substring(0, 8)}...)` : '❌ Missing');
-  console.log('LARK_REDIRECT_URI:', process.env.LARK_REDIRECT_URI || 'Using default');
   console.log('LARK_BASE_URL:', process.env.LARK_BASE_URL || 'Using default');
   console.log('LARK_SCOPES:', process.env.LARK_SCOPES || 'Using default');
   
@@ -50,18 +48,10 @@ export const env = validateEnv();
 export const larkConfig = {
   appId: process.env.LARK_APP_ID || 'your_app_id_here',
   appSecret: process.env.LARK_APP_SECRET || 'your_app_secret_here',
-  redirectUri: env.LARK_REDIRECT_URI,
   baseUrl: env.LARK_BASE_URL,
   scopes: env.LARK_SCOPES ? env.LARK_SCOPES.split(',').map(scope => scope.trim()).filter(s => s) : [],
   port: env.PORT
 };
-
-console.log('📋 Final larkConfig:');
-console.log('  - appId:', larkConfig.appId);
-// console.log('  - appSecret:', larkConfig.appSecret.substring(0, 8) + '...');
-console.log('  - redirectUri:', larkConfig.redirectUri);
-console.log('  - baseUrl:', larkConfig.baseUrl);
-console.log('  - scopes:', larkConfig.scopes);
 
 // 检查是否有必需的环境变量
 export function checkRequiredEnvVars(): { isValid: boolean; missingVars: string[] } {

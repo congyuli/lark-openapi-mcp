@@ -45,7 +45,7 @@ program
     
     // 导入并合并 larkConfig 的值
     const { larkConfig } = await import('./mcp-server/config/env');
-    
+    const mergedPort = typeof mergedOptions.port === 'string' ? parseInt(mergedOptions.port) : mergedOptions.port;
     // 将 larkConfig 的值合并到 mergedOptions 中
     const finalOptions = {
       ...mergedOptions,
@@ -53,12 +53,11 @@ program
       domain: mergedOptions.domain || larkConfig.baseUrl,
       appId: mergedOptions.appId || larkConfig.appId,
       appSecret: mergedOptions.appSecret || larkConfig.appSecret,
-      // 如果 mergedOptions.port 是字符串，转换为数字
-      port: typeof mergedOptions.port === 'string' ? parseInt(mergedOptions.port) : mergedOptions.port
+      port: mergedPort || larkConfig.port
     };
     
-    console.log('mergedOptions', mergedOptions);
-    console.log('finalOptions', finalOptions);
+    console.log('mergedOptions', { ...mergedOptions, ...(mergedOptions.appSecret ? { appSecret: '[HIDDEN]' } : {}) });
+    console.log('finalOptions', { ...finalOptions, ...(finalOptions.appSecret ? { appSecret: '[HIDDEN]' } : {}) });
     
     const { mcpServer, larkClient } = initMcpServer(finalOptions);
     if (finalOptions.mode === 'stdio') {

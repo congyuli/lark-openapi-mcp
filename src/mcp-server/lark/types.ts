@@ -1,7 +1,7 @@
 export interface LarkOAuthConfig {
   appId: string;
   appSecret: string;
-  redirectUri: string;
+  // redirectUri?: string;
   scopes?: string[];
   baseUrl?: string;
 }

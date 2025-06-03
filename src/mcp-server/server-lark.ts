@@ -193,13 +193,6 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
     console.log(`[DEBUG] Using state: ${authState}`);
 
     try {
-      // Get scopes from larkConfig, fallback to minimal scope for testing
-      console.log(`[DEBUG] Current larkConfig:`, {
-        appId: larkConfig.appId,
-        baseUrl: larkConfig.baseUrl,
-        redirectUri: larkConfig.redirectUri,
-        scopes: larkConfig.scopes,
-      });
       const larkScopes = larkConfig.scopes.length > 0 ? larkConfig.scopes.join(' ') : 'contact:user.id:readonly'; // Use minimal scope for testing
 
       // Construct Lark's actual authorization URL
