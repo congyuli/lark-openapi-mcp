@@ -345,126 +345,163 @@ allowedHeaders: ['Authorization', 'Content-Type', 'MCP-Protocol-Version']
    ```
 
 
-## MCP-Remote 调用 API 时序图
+## MCP-Remote 调用 Lark MCP SSE Server 时序图
 
 ```
-mcp-remote客户端                    Lark MCP SSE服务器                    用户浏览器
-      |                                    |                                    |
-      |                                    |                                    |
-═══════════════════════ OAuth 2.0 授权码流程 ═══════════════════════              |
-      | 1. GET /authorize?                 |                                    |
-      |    client_id=xxx&                  |                                    |
-      |    redirect_uri=xxx&               |                                    |
-      |    code_challenge=xxx&             |                                    |
-      |    response_type=code              |                                    |
-      |---------------------------------->|                                     |
-      |                                    |                                    |
-      |                                    | 2. 重定向到授权页面                   |
-      |                                    |----------------------------------->|
-      |                                    |                                    |
-      |                                    |                                    |
-      | 3. 用户同意授权，重定向回调，携带authorization_code                          |
-      |<------------------------------------------------------------------------|                   
-      |                                    |                                    |
-═══════════════════════ 令牌获取阶段 ═══════════════════════
-      |                                    |                                    |
-      | 4. POST /token                     |                                    |
-      |     grant_type=authorization_code  |                                    |
-      |     code=xxx                       |                                    |
-      |     code_verifier=xxx              |                                    |
-      |----------------------------------->|                                    |
-      |                                    |                                    |
-      | 5. 返回access_token和refresh_token  |                                    |
-      |     {                              |                                    |
-      |       access_token: "jwt...",      |                                    |
-      |       refresh_token: "xxx",        |                                    |
-      |       expires_in: 3600             |                                    |
-      |     }                              |                                    |
-      |<---------------------------------- |                                    |
-      |                                    |                                    |
-      | 6. 保存tokens到本地缓存              |                                    |
-      |     (~/.mcp-auth/)                 |                                    |
-      |                                    |                                    |
-═══════════════════════ MCP SSE 连接阶段 ═══════════════════════
-      |                                    |                                    |
-      | 7. GET /sse                       |                                    |
-      |     Authorization: Bearer <token>  |                                    |
-      |----------------------------------->|                                    |
-      |                                    |                                    |
-      |                                    | 8. 验证token (authenticateToken)   |
-      |                                    |                                    |
-      |                                    | 9. 创建MCP Server实例              |
-      |                                    |     - 注册echo工具                  |
-      |                                    |     - 创建SSE Transport             |
-      |                                    |                                    |
-      | 10. 建立SSE长连接                    |                                    |
-      |    Content-Type: text/event-stream |                                    |
-      |<---------------------------------- |                                    |
-═══════════════════════ MCP 工具调用阶段 ═══════════════════════
-      |                                    |                                    |
-      | 11. POST /messages?sessionId=xxx   |                                    |
-      |     Authorization: Bearer <token>  |                                    |
-      |     {                              |                                    |
-      |       jsonrpc: "2.0",              |                                    |
-      |       method: "tools/list"         |                                    |
-      |     }                              |                                    |
-      |----------------------------------> |                                    |
-      |                                    |                                    |
-      | 12. 返回工具列表                     |                                    |
-      |     {                              |                                    |
-      |       tools: [{                    |                                    |
-      |         name: "echo",              |                                    |
-      |         description: "Echo back..."|                                    |
-      |       }]                           |                                    |
-      |     }                              |                                    |
-      |<---------------------------------- |                                    |
-      |                                    |                                    |
-      | 13. POST /messages?sessionId=xxx   |                                    |
-      |     Authorization: Bearer <token>  |                                    |
-      |     {                              |                                    |
-      |       jsonrpc: "2.0",              |                                    |
-      |       method: "tools/call",        |                                    |
-      |       params: {                    |                                    |
-      |         name: "echo",              |                                    |
-      |         arguments: {message: "hi"} |                                    |
-      |       }                            |                                    |
-      |     }                              |                                    |
-      |----------------------------------> |                                    |
-      |                                    |                                    |
-      | 14. 返回工具执行结果                  |                                    |
-      |     {                              |                                    |
-      |       content: [{                  |                                    |
-      |         type: "text",              |                                    |
-      |         text: "Echo: hi"           |                                    |
-      |       }]                           |                                    |
-      |     }                              |                                    |
-      |<---------------------------------- |                                    |
-      |                                    |                                    |
-═══════════════════════ 保持连接阶段 ═════════════════════════════
-      |                                    |                                    |
-      | 15. 接收ping保活消息 (每15秒)         |                                    |
-      |     event: ping                    |                                    |
-      |     data: <timestamp>              |                                    |
-      |<---------------------------------- |                                    |
-      |                                    |                                    |
-═══════════════════════ 令牌刷新阶段 (可选) ═══════════════════════
-      |                                    |                                    |
-      | 16. 检测到token即将过期               |                                    |
-      |     POST /token                    |                                    |
-      |     grant_type=refresh_token       |                                    |
-      |     refresh_token=xxx              |                                    |
-      |----------------------------------> |                                    |
-      |                                    |                                    |
-      | 17. 返回新的access_token            |                                    |
-      |     {                              |                                    |
-      |       access_token: "new_jwt...",  |                                    |
-      |       expires_in: 3600             |                                    |
-      |     }                              |                                    |
-      |<---------------------------------- |                                    |
-      |                                    |                                    |
-      | 18. 更新本地token缓存                |                                    |
-      |                                    |                                    |
-      | 19. 后续请求使用新token              |                                    |
-      |     Authorization: Bearer <new_token>                                   |
-      |----------------------------------> |                                    |
-```
+mcp-remote客户端                    Lark MCP SSE服务器                     Lark Server                      用户浏览器
+      |                                    |                                    |                              |
+      |                                    |                                    |                              |
+═══════════════════════ OAuth 2.0 授权码流程 ═══════════════════════              |                              |
+      | 1. GET /authorize?                 |                                    |                              |
+      |    client_id=xxx&                  |                                    |                              |
+      |    redirect_uri=xxx&               |                                    |                              |
+      |    code_challenge=xxx&             |                                    |                              |
+      |    response_type=code              |                                    |                              |
+      |---------------------------------->|                                     |                              |
+      |                                    |                                    |                              |
+      |                                    | 2. 重定向到授权页面                   |                              |
+      |                                    |------------------------------------------------------------------>|
+      |                                    |                                    |                              |
+      |                                    |                                    |                              |
+      | 3. 用户同意授权，重定向回调，携带authorization_code                          |                              |
+      |<-------------------------------------------------------------------------------------------------------|
+      |                                    |                                    |                              |
+═══════════════════════ 令牌获取阶段 ═══════════════════════                      |                              |
+      |                                    |                                    |                              |
+      | 4. POST /token                     |                                    |                              |
+      |     grant_type=authorization_code  |                                    |                              |
+      |     code=xxx                       |                                    |                              |
+      |     code_verifier=xxx              |                                    |                              |
+      |----------------------------------->|                                    |                              |
+      |                                    |                                    |                              |
+      |                                    | 5. 向Lark Server验证授权码并获取token |                              |
+      |                                    |     POST /oauth/v2/access_token    |                              |
+      |                                    |     code=xxx&                      |                              |
+      |                                    |     client_id=xxx&                 |                              |
+      |                                    |     client_secret=xxx              |                              |
+      |                                    |----------------------------------->|                              |
+      |                                    |                                    |                              |
+      |                                    | 6. 返回Lark用户access_token         |                              |
+      |                                    |     {                              |                              |
+      |                                    |       access_token: "u-xxx",       |                              |
+      |                                    |       refresh_token: "xxx",        |                              |
+      |                                    |       expires_in: 7200             |                              |
+      |                                    |     }                              |                              |
+      |                                    |<-----------------------------------|                              |
+      |                                    |                                    |                              |
+      | 7. 返回access_token和refresh_token  |                                    |                              |
+      |     {                              |                                    |                              |
+      |       access_token: "u-xxx",       |                                    |                              |
+      |       refresh_token: "xxx",        |                                    |                              |
+      |       expires_in: 7200             |                                    |                              |
+      |     }                              |                                    |                              |
+      |<---------------------------------- |                                    |                              |
+      |                                    |                                    |                              |
+      | 8. 保存tokens到本地缓存              |                                    |                              |
+      |     (~/.mcp-auth/)                 |                                    |                              |
+      |                                    |                                    |                              |
+═══════════════════════ MCP SSE 连接阶段 ═══════════════════════                  |                              |
+      |                                    |                                    |                              |
+      | 9. GET /sse                        |                                    |                              |
+      |     Authorization: Bearer <token>  |                                    |                              |
+      |----------------------------------->|                                    |                              |
+      |                                    |                                    |                              |
+      |                                    | 10. 验证token (authenticateToken)  |                              |
+      |                                    |     GET /open-apis/authen/v1/user_info                            |
+      |                                    |     Authorization: Bearer <token>  |                              |
+      |                                    |----------------------------------->|                              |
+      |                                    |                                    |                              |
+      |                                    | 11. 返回用户信息                     |                              |
+      |                                    |     {code: 0, data: {sub: "xxx"}}  |                              |
+      |                                    |<-----------------------------------|                              |
+      |                                    |                                    |                              |
+      |                                    | 12. 创建MCP Server实例              |                              |
+      |                                    |     - 注册echo工具                  |                              |
+      |                                    |     - 创建SSE Transport             |                              |
+      |                                    |                                    |                              |
+      | 13. 建立SSE长连接                    |                                    |                              |
+      |    Content-Type: text/event-stream |                                    |                              |
+      |<---------------------------------- |                                    |                              |
+═══════════════════════ MCP 工具调用阶段 ═══════════════════════                                              |
+      |                                    |                                    |                              |
+      | 14. POST /messages?sessionId=xxx   |                                    |                              |
+      |     Authorization: Bearer <token>  |                                    |                              |
+      |     {                              |                                    |                              |
+      |       jsonrpc: "2.0",              |                                    |                              |
+      |       method: "tools/list"         |                                    |                              |
+      |     }                              |                                    |                              |
+      |----------------------------------> |                                    |                              |
+      |                                    |                                    |                              |
+      | 15. 返回工具列表                     |                                    |                              |
+      |     {                              |                                    |                              |
+      |       tools: [{                    |                                    |                              |
+      |         name: "echo",              |                                    |                              |
+      |         description: "Echo back..."|                                    |                              |
+      |       }]                           |                                    |                              |
+      |     }                              |                                    |                              |
+      |<---------------------------------- |                                    |                              |
+      |                                    |                                    |                              |
+      | 16. POST /messages?sessionId=xxx   |                                    |                              |
+      |     Authorization: Bearer <token>  |                                    |                              |
+      |     {                              |                                    |                              |
+      |       jsonrpc: "2.0",              |                                    |                              |
+      |       method: "tools/call",        |                                    |                              |
+      |       params: {                    |                                    |                              |
+      |         name: "echo",              |                                    |                              |
+      |         arguments: {message: "hi"} |                                    |                              |
+      |       }                            |                                    |                              |
+      |     }                              |                                    |                              |
+      |----------------------------------> |                                    |                              |
+      |                                    |                                    |                              |
+      | 17. 返回工具执行结果                  |                                    |                              |
+      |     {                              |                                    |                              |
+      |       content: [{                  |                                    |                              |
+      |         type: "text",              |                                    |                              |
+      |         text: "Echo: hi"           |                                    |                              |
+      |       }]                           |                                    |                              |
+      |     }                              |                                    |                              |
+      |<---------------------------------- |                                    |                              |
+      |                                    |                                    |                              |
+═══════════════════════ 保持连接阶段 (可选) ═════════════════════════════                                         |
+      |                                    |                                    |                              |
+      | 18. 接收ping保活消息 (每15秒)        |                                     |                              |
+      |     event: ping                    |                                    |                              |
+      |     data: <timestamp>              |                                    |                              |
+      |<---------------------------------- |                                    |                              |
+      |                                    |                                    |                              |
+═══════════════════════ 令牌刷新阶段  ═══════════════════════                                                    |
+      |                                    |                                    |                              |
+      | 19. 检测到token过期                  |                                    |                              |
+      |     POST /token                    |                                    |                              |
+      |     grant_type=refresh_token       |                                    |                              |
+      |     refresh_token=xxx              |                                    |                              |
+      |----------------------------------> |                                    |                              |
+      |                                    |                                    |                              |
+      |                                    | 20. 向Lark Server刷新token         |                              |
+      |                                    |     POST /oauth/v2/refresh_token   |                              |
+      |                                    |     refresh_token=xxx&             |                              |
+      |                                    |     client_id=xxx&                 |                              |
+      |                                    |     client_secret=xxx              |                              |
+      |                                    |------------------------------------>|                              |
+      |                                    |                                    |                              |
+      |                                    | 21. 返回新的access_token            |                              |
+      |                                    |     {                              |                              |
+      |                                    |       access_token: "u-new...",    |                              |
+      |                                    |       expires_in: 7200             |                              |
+      |                                    |     }                              |                              |
+      |                                    |<------------------------------------|                              |
+      |                                    |                                    |                              |
+      | 22. 返回新的access_token            |                                    |                              |
+      |     {                              |                                    |                              |
+      |       access_token: "u-new...",    |                                    |                              |
+      |       expires_in: 7200             |                                    |                              |
+      |     }                              |                                    |                              |
+      |<---------------------------------- |                                    |                              |
+      |                                    |                                    |                              |
+      | 23. 更新本地token缓存                |                                    |                              |
+      |                                    |                                    |                              |
+      | 24. 后续请求使用新token              |                                    |                              |
+      |     Authorization: Bearer <new_token>                                   |                              |
+      |----------------------------------> |                                    |      
+
+```      
