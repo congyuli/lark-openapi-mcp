@@ -595,15 +595,17 @@ export class LarkOAuthClient {
     };
 
     console.log('🔄 Token refresh request:');
-    console.log('  - URL:', `${this.config.baseUrl}/open-apis/authen/v2/oauth/token`);
+    console.log('  - URL:', `${this.config.baseUrl}/open-apis/authen/v1/oidc/refresh_access_token`);
     console.log('  - App ID:', this.config.appId);
     console.log('  - Refresh token length:', refreshToken.length);
-
-    const response = await fetch(`${this.config.baseUrl}/open-apis/authen/v2/oauth/token`, {
+    const appAccessToken = await this.getAppAccessToken();
+    console.log('🔄 App access token:', appAccessToken);
+    const response = await fetch(`${this.config.baseUrl}/open-apis/authen/v1/oidc/refresh_access_token`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${appAccessToken}`
       },
       body: JSON.stringify(requestBody)
     });
