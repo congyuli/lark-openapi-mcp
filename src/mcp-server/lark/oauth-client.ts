@@ -18,7 +18,7 @@ export class LarkOAuthClient {
       // scopes: [],
       ...config
     };
-    console.log('🔄 LarkOAuthClient config:', this.config);
+    // console.log('🔄 LarkOAuthClient config:', this.config);
   }
 
   /**
@@ -200,12 +200,12 @@ export class LarkOAuthClient {
       client_secret: this.config.appSecret
     };
 
-    console.log('🔄 Token exchange request:');
-    console.log('  - URL:', `${this.config.baseUrl}/open-apis/authen/v2/oauth/token`);
-    console.log('  - App ID:', this.config.appId);
-    console.log('  - App Secret:', this.config.appSecret.substring(0, 8) + '...');
-    console.log('  - Redirect URI:', this.config.redirectUri);
-    console.log('  - Code length:', code.length);
+    // console.log('🔄 Token exchange request:');
+    // console.log('  - URL:', `${this.config.baseUrl}/open-apis/authen/v2/oauth/token`);
+    // console.log('  - App ID:', this.config.appId);
+    // console.log('  - App Secret:', this.config.appSecret.substring(0, 8) + '...');
+    // console.log('  - Redirect URI:', this.config.redirectUri);
+    // console.log('  - Code length:', code.length);
 
     const response = await fetch(`${this.config.baseUrl}/open-apis/authen/v2/oauth/token`, {
       method: 'POST',

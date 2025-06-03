@@ -58,7 +58,7 @@ export const larkConfig = {
 
 console.log('📋 Final larkConfig:');
 console.log('  - appId:', larkConfig.appId);
-console.log('  - appSecret:', larkConfig.appSecret.substring(0, 8) + '...');
+// console.log('  - appSecret:', larkConfig.appSecret.substring(0, 8) + '...');
 console.log('  - redirectUri:', larkConfig.redirectUri);
 console.log('  - baseUrl:', larkConfig.baseUrl);
 console.log('  - scopes:', larkConfig.scopes);
