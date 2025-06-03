@@ -593,8 +593,8 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
     }
   }
 
-  // MCP SSE 端点 - 只支持 POST 用于建立SSE连接
-  // 注意：这里将在 initSSEServer 中设置正确的路由
+  // MCP SSE 端点 - 只支持 GET 用于建立SSE连接
+  // 注意：SSE连接必须使用GET方法，POST用于/messages端点
 
   // MCP Messages 端点 - 只支持 POST 用于发送消息
   app.post('/messages', authenticateToken, handlePostMessage);
@@ -645,6 +645,19 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
 // MCP SSE 端点 - 只支持 GET 用于建立SSE连接
 app.get('/sse', authenticateToken, handleSSEConnection);
 
+// 处理错误的 POST /sse 请求，返回有用的错误信息
+app.post('/sse', (req, res) => {
+  console.log(`[WARNING] Received incorrect POST request to /sse endpoint`);
+  res.status(405).json({
+    error: 'Method Not Allowed',
+    message: 'SSE endpoint only supports GET method for establishing connections',
+    correct_usage: {
+      sse_connection: 'GET /sse',
+      send_messages: 'POST /messages?sessionId=<session_id>'
+    }
+  });
+});
+
   // 启动服务器
   const host = options.host || 'localhost';
 
@@ -656,6 +669,8 @@ app.get('/sse', authenticateToken, handleSSEConnection);
     console.log(`  - Register: POST http://${host}:${PORT}/register`);
     console.log(`  - Authorize: GET http://${host}:${PORT}/authorize`);
     console.log(`  - Token: POST http://${host}:${PORT}/token`);
-    console.log(`  - SSE: POST http://${host}:${PORT}/sse`);
+    console.log(`MCP endpoints:`);
+    console.log(`  - SSE Connection: GET http://${host}:${PORT}/sse`);
+    console.log(`  - Messages: POST http://${host}:${PORT}/messages`);
   });
 }
