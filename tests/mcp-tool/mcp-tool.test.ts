@@ -219,6 +219,25 @@ describe('LarkMcpTool', () => {
       // 验证customHandler被调用而非larkOapiHandler
       expect(larkOapiHandler).toHaveBeenCalled();
     });
+
+    it('应该在 USER_ACCESS_TOKEN 模式下且没有用户访问令牌时不立即抛出错误', async () => {
+      // 创建 USER_ACCESS_TOKEN 模式的实例
+      const toolWithUserTokenMode = new LarkMcpTool({
+        appId: 'test_app',
+        appSecret: 'test_secret',
+        toolsOptions: { allowTools: ['im.v1.message.create'] as ToolName[] },
+        tokenMode: TokenMode.USER_ACCESS_TOKEN,
+      });
+
+      // 在 USER_ACCESS_TOKEN 模式下，即使没有全局 userAccessToken，
+      // registerMcpServer 也不应该立即抛出错误
+      expect(() => {
+        toolWithUserTokenMode.registerMcpServer(mockServer);
+      }).not.toThrow();
+
+      // 验证工具已经注册
+      expect(mockServer.tool).toHaveBeenCalled();
+    });
   });
 
   // 添加额外的构造函数测试
@@ -248,26 +267,6 @@ describe('LarkMcpTool', () => {
 
       // 注册服务器以验证tokenMode是否传递给handler
       tool.registerMcpServer(mockServer);
-    });
-  });
-
-  describe('处理USER_ACCESS_TOKEN模式错误情况', () => {
-    it('当tokenMode为USER_ACCESS_TOKEN但没有userAccessToken时应返回错误', async () => {
-      const tool = new LarkMcpTool({
-        client: mockClient,
-        tokenMode: TokenMode.USER_ACCESS_TOKEN,
-      });
-
-      tool.registerMcpServer(mockServer);
-
-      // 提取处理函数
-      const handlerFunction = (mockServer.tool as jest.Mock).mock.calls[0][3];
-
-      // 调用处理函数
-      const result = await handlerFunction({ content: 'test' });
-
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toBe('Invalid UserAccessToken');
     });
   });
 

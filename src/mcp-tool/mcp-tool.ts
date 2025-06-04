@@ -4,7 +4,7 @@ import { LarkMcpToolOptions, McpTool, ToolNameCase, TokenMode } from './types';
 import { AllTools, AllToolsZh } from './tools';
 import { filterTools } from './utils/filter-tools';
 import { defaultToolNames } from './constants';
-import { larkOapiHandler } from './utils/handler';
+import { larkOapiHandler, setGlobalUserManager, getUserLarkClientAndToken } from './utils/handler';
 import { caseTransf } from './utils/case-transf';
 import { getShouldUseUAT } from './utils/get-should-use-uat';
 
@@ -128,7 +128,7 @@ export class LarkMcpTool {
    */
   registerMcpServer(server: McpServer, options?: { toolNameCase?: ToolNameCase }): void {
     for (const tool of this.allTools) {
-      server.tool(caseTransf(tool.name, options?.toolNameCase), tool.description, tool.schema, (params: any) => {
+      server.tool(caseTransf(tool.name, options?.toolNameCase), tool.description, tool.schema, async (params: any) => {
         try {
           if (!this.client) {
             return {
@@ -136,18 +136,51 @@ export class LarkMcpTool {
               content: [{ type: 'text' as const, text: 'Client not initialized' }],
             };
           }
+          
           const handler = tool.customHandler || larkOapiHandler;
-          if (this.tokenMode == TokenMode.USER_ACCESS_TOKEN && !this.userAccessToken) {
-            return {
-              isError: true,
-              content: [{ type: 'text' as const, text: 'Invalid UserAccessToken' }],
-            };
+          
+          // 🔄 改进：不在全局实例层面检查 userAccessToken
+          // 而是将检查逻辑委托给 handler，让 handler 动态查找用户专属的 LarkMcpTool 实例
+          
+          // 对于 USER_ACCESS_TOKEN 模式，我们需要动态获取用户token
+          // 这个检查现在移到了 handler 层面进行
+          
+          // 🔄 新增：对于只支持用户访问令牌的工具，强制设置 shouldUseUAT
+          let shouldUseUAT = getShouldUseUAT(this.tokenMode, this.userAccessToken, params?.useUAT);
+          
+          // 如果工具的 accessTokens 只包含 'user'，则强制使用用户访问令牌
+          if (tool.accessTokens && tool.accessTokens.length === 1 && tool.accessTokens[0] === 'user') {
+            shouldUseUAT = true;
+            console.log(`[LarkMcpTool] 🔐 Tool ${tool.name} only supports user access token, forcing shouldUseUAT = true`);
           }
-          const shouldUseUAT = getShouldUseUAT(this.tokenMode, this.userAccessToken, params?.useUAT);
-          return handler(
+          
+          console.log(`[LarkMcpTool] 🎯 Tool execution: ${tool.name}, TokenMode: ${this.tokenMode}, Global UAT: ${this.userAccessToken ? 'available' : 'none'}, shouldUseUAT: ${shouldUseUAT}`);
+          
+          // 🔄 新增：对于 customHandler，需要提供动态获取用户访问令牌的能力
+          let effectiveUserAccessToken = this.userAccessToken;
+          
+          // 如果是 customHandler，且需要用户访问令牌，尝试动态获取
+          if (tool.customHandler && shouldUseUAT && !effectiveUserAccessToken) {
+            // 使用 handler 中的逻辑来获取用户访问令牌
+            try {
+              const { userAccessToken: dynamicToken } = getUserLarkClientAndToken(this.client, {
+                userAccessToken: this.userAccessToken,
+                tool,
+                tokenMode: this.tokenMode,
+              });
+              if (dynamicToken) {
+                effectiveUserAccessToken = dynamicToken;
+                console.log(`[LarkMcpTool] 🔑 Found dynamic user access token for customHandler: ${dynamicToken.substring(0, 20)}...`);
+              }
+            } catch (error) {
+              console.warn(`[LarkMcpTool] ⚠️ Failed to get dynamic user access token for customHandler:`, error);
+            }
+          }
+          
+          return await handler(
             this.client,
             { ...params, useUAT: shouldUseUAT },
-            { userAccessToken: this.userAccessToken, tool },
+            { userAccessToken: effectiveUserAccessToken, tool, tokenMode: this.tokenMode },
           );
         } catch (error) {
           return {

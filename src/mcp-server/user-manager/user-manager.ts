@@ -97,12 +97,14 @@ export class UserManager implements IUserManager {
   removeConnection(userId: string, sessionId: string): void {
     const userSession = this.users.get(userId);
     if (!userSession) {
-      throw new UserNotFoundError(`User session not found: ${userId}`);
+      console.log(`[UserManager] ⚠️ User session not found when removing connection: ${userId}, ignoring`);
+      return; // 优雅处理：用户不存在时直接返回
     }
 
     const removed = userSession.connections.delete(sessionId);
     if (!removed) {
-      throw new ConnectionNotFoundError(`Connection not found: ${sessionId} for user: ${userId}`);
+      console.log(`[UserManager] ⚠️ Connection ${sessionId} not found for user ${userId}, may have been already removed`);
+      return; // 优雅处理：连接不存在时直接返回
     }
 
     userSession.lastActiveTime = Date.now();
@@ -201,14 +203,27 @@ export class UserManager implements IUserManager {
     return null;
   }
 
-  findUserByToken(token: string): { userId: string; userSession: UserSession } | null {
-    // 通过完整token查找用户
-    for (const [userId, userSession] of this.users) {
-      if (userSession.accessToken === token) {
-        return { userId, userSession };
+  /**
+   * 通过完整访问令牌查找用户信息
+   * 用于工具执行时根据完整 userAccessToken 查找对应的用户会话
+   * @param accessToken 完整的访问令牌
+   * @returns 用户信息和会话，如果找到的话
+   */
+  findUserByToken(accessToken: string): { userId: string; userSession: UserSession } | null {
+    try {
+      for (const [userId, userSession] of this.users.entries()) {
+        if (userSession.accessToken === accessToken) {
+          console.log(`[UserManager] 🔍 Found user ${userId} by exact token match`);
+          return { userId, userSession };
+        }
       }
+      
+      console.log(`[UserManager] ⚠️ No user found for exact token: ${accessToken.substring(0, 20)}...`);
+      return null;
+    } catch (error) {
+      console.error(`[UserManager] ❌ Error finding user by exact token:`, error);
+      return null;
     }
-    return null;
   }
 
   /**
@@ -234,13 +249,23 @@ export class UserManager implements IUserManager {
     }
   }
 
+  /**
+   * 获取所有活跃用户的访问令牌列表（用于调试）
+   * @returns 所有活跃用户的访问令牌数组
+   */
   getAllActiveUserTokens(): string[] {
-    // 获取所有活跃用户的token列表（用于调试）
-    const tokens: string[] = [];
-    this.users.forEach((userSession) => {
-      tokens.push(userSession.accessToken);
-    });
-    return tokens;
+    try {
+      const tokens: string[] = [];
+      for (const [userId, userSession] of this.users.entries()) {
+        if (userSession.accessToken) {
+          tokens.push(userSession.accessToken);
+        }
+      }
+      return tokens;
+    } catch (error) {
+      console.error(`[UserManager] ❌ Error getting active user tokens:`, error);
+      return [];
+    }
   }
 
   // 私有方法

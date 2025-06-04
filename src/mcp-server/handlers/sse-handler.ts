@@ -3,8 +3,9 @@ import crypto from 'crypto';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { UserManager } from '../user-manager';
-import { requireUserId, getUserName } from '../user-manager';
+import { requireUserId, getUserName, getUserAccessToken } from '../user-manager';
 import { ConnectionInfo } from '../shared/types';
+import { setRequestContext, clearRequestContext } from '../../mcp-tool/utils/handler';
 
 export class SSEHandler {
   constructor(
@@ -77,7 +78,12 @@ export class SSEHandler {
       // 处理连接关闭
       req.on('close', () => {
         console.log(`[DEBUG] SSE connection closed for session: ${sessionId}`);
-        this.userManager.removeConnection(userId, sessionId);
+        try {
+          this.userManager.removeConnection(userId, sessionId);
+        } catch (error) {
+          console.error(`[ERROR] Failed to remove connection ${sessionId} for user ${userId}:`, error);
+          // 不重新抛出错误，避免系统崩溃
+        }
       });
 
       req.on('error', (error: any) => {
@@ -86,7 +92,12 @@ export class SSEHandler {
         } else {
           console.error(`[ERROR] SSE connection error for session ${sessionId}:`, error);
         }
-        this.userManager.removeConnection(userId, sessionId);
+        try {
+          this.userManager.removeConnection(userId, sessionId);
+        } catch (removeError) {
+          console.error(`[ERROR] Failed to remove connection ${sessionId} for user ${userId}:`, removeError);
+          // 不重新抛出错误，避免系统崩溃
+        }
       });
 
       res.on('error', (error: any) => {
@@ -95,7 +106,12 @@ export class SSEHandler {
         } else {
           console.error(`[ERROR] SSE response error for session ${sessionId}:`, error);
         }
-        this.userManager.removeConnection(userId, sessionId);
+        try {
+          this.userManager.removeConnection(userId, sessionId);
+        } catch (removeError) {
+          console.error(`[ERROR] Failed to remove connection ${sessionId} for user ${userId}:`, removeError);
+          // 不重新抛出错误，避免系统崩溃
+        }
       });
 
       // 保持连接活跃
@@ -121,7 +137,11 @@ export class SSEHandler {
     const sessionId = req.query.sessionId as string;
     const userId = requireUserId(req);
     
+    // 获取当前HTTP请求中的用户访问令牌
+    const currentAccessToken = getUserAccessToken(req);
+    
     console.log(`[DEBUG] Received POST message for session: ${sessionId}, user: ${userId}`);
+    console.log(`[DEBUG] Current request access token: ${currentAccessToken?.substring(0, 20)}...`);
 
     if (!sessionId) {
       res.status(400).json({ error: 'Missing sessionId parameter' });
@@ -139,10 +159,45 @@ export class SSEHandler {
         return;
       }
 
-      // 将消息传递给SSE transport处理
-      await connection.transport.handlePostMessage(req, res, req.body);
+      // 🔑 关键改进：在工具执行前设置请求上下文
+      // 将当前HTTP请求的认证信息传递给工具执行层
+      if (currentAccessToken) {
+        const requestContext = {
+          userId,
+          accessToken: currentAccessToken,
+          userName: getUserName(req),
+          sessionId,
+          clientId: req.user?.client_id,
+        };
+        
+        setRequestContext(sessionId, requestContext);
+        console.log(`[DEBUG] 🔑 Set request context for tool execution - User: ${userId}, Token: ${currentAccessToken.substring(0, 20)}...`);
+      } else {
+        console.warn(`[DEBUG] ⚠️ No access token found in current request for user: ${userId}`);
+      }
+
+      try {
+        // 将消息传递给SSE transport处理
+        await connection.transport.handlePostMessage(req, res, req.body);
+        
+        console.log(`[DEBUG] ✅ POST message handled successfully for session: ${sessionId}`);
+      } finally {
+        // 🧹 清理请求上下文（在工具执行完成后）
+        if (currentAccessToken) {
+          // 延迟清理，确保异步工具执行完成
+          setTimeout(() => {
+            clearRequestContext(sessionId);
+          }, 1000);
+        }
+      }
     } catch (error) {
       console.error('[ERROR] Failed to handle POST message:', error);
+      
+      // 确保在错误情况下也清理上下文
+      if (currentAccessToken) {
+        clearRequestContext(sessionId);
+      }
+      
       if (!res.headersSent) {
         res.status(500).json({ error: 'Failed to process message' });
       }

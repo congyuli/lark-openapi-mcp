@@ -4,7 +4,7 @@ export function getShouldUseUAT(tokenMode: TokenMode, userAccessToken?: string, 
   switch (tokenMode) {
     case TokenMode.USER_ACCESS_TOKEN: {
       if (!userAccessToken) {
-        throw new Error('Invalid UserAccessToken');
+        return true;
       }
       return true;
     }
