@@ -8,6 +8,13 @@ import { LarkOAuthClient } from './lark/oauth-client';
 import { larkConfig, checkRequiredEnvVars } from './config/env';
 import { McpServerOptions } from './shared';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { UserManager } from './user-manager';
+import { 
+  requireUserId, 
+  requireUserAccessToken, 
+  addUserSessionMethods,
+  getUserName 
+} from './user-manager';
 
 // Check environment variables on startup
 const envCheck = checkRequiredEnvVars();
@@ -34,6 +41,34 @@ declare module 'express-serve-static-core' {
 export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, larkClient?: any): void {
   const app = express();
   const PORT = options.port || 3000;
+
+  // 创建UserManager实例
+  const userManager = new UserManager(async (accessToken: string) => {
+    // 创建用户专属的LarkClient实例
+    if (larkClient && typeof larkClient.createUserClient === 'function') {
+      return await larkClient.createUserClient(accessToken);
+    } else {
+      // 简化的LarkClient创建，如果原始larkClient不支持createUserClient
+      const userLarkClient = { ...larkClient };
+      if (userLarkClient.updateUserAccessToken) {
+        userLarkClient.updateUserAccessToken(accessToken);
+      }
+      return userLarkClient;
+    }
+  });
+
+  // 优雅关闭处理
+  process.on('SIGTERM', async () => {
+    console.log('[SERVER] Received SIGTERM, starting graceful shutdown...');
+    await userManager.shutdown();
+    process.exit(0);
+  });
+
+  process.on('SIGINT', async () => {
+    console.log('[SERVER] Received SIGINT, starting graceful shutdown...');
+    await userManager.shutdown();
+    process.exit(0);
+  });
 
   // Enable CORS for all routes
   app.use(
@@ -385,36 +420,49 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
         return;
       }
 
-      // Set user information from Lark response
-      req.user = {
-        client_id: 'lark_user', // Since we're proxying Lark, we don't have a traditional client_id
-        scope: 'mcp',
-        // 存储验证成功的 token，供 MCP 工具使用
-        accessToken: token,
-      } as any;
+      // 获取用户信息
+      const userId = data.data?.sub;
+      const userName = data.data?.name;
 
-      // Add Lark-specific properties
-      (req.user as any).lark_user_id = data.data?.sub;
-      (req.user as any).lark_user_name = data.data?.name;
-
-      // 更新 larkClient 的用户访问令牌
-      if (globalLarkClient && globalLarkClient.updateUserAccessToken) {
-        console.log(`[DEBUG] Updating larkClient with user access token: ${token.substring(0, 20)}...${token.substring(token.length - 10)}`);
-        globalLarkClient.updateUserAccessToken(token);
-        console.log(`[DEBUG] ✅ LarkClient user access token updated successfully`);
-      } else {
-        console.log(`[DEBUG] ⚠️  No globalLarkClient available to update token`);
+      if (!userId) {
+        console.log(`[DEBUG] No user ID found in Lark response`);
+        res.status(401).json({ error: 'invalid_token', error_description: 'User ID not found' });
+        return;
       }
 
-      next();
+      try {
+        // 使用UserManager获取或创建用户会话
+        const userSession = await userManager.getOrCreateUserSession(userId, token, userName);
+        
+        // 设置用户信息到请求对象
+        req.user = {
+          client_id: 'lark_user',
+          scope: 'mcp',
+          accessToken: token,
+          lark_user_id: userId,
+          lark_user_name: userName,
+          userSession: userSession,
+        } as any;
+
+        // 添加用户会话辅助方法
+        addUserSessionMethods(req);
+
+        console.log(`[DEBUG] ✅ User authenticated and session created/updated: ${userId}`);
+        console.log(`[DEBUG] Active users: ${userManager.getActiveUserCount()}, Total connections: ${userManager.getTotalConnectionCount()}`);
+
+        next();
+      } catch (userError) {
+        console.error('[ERROR] UserManager error:', userError);
+        res.status(500).json({ 
+          error: 'user_session_error', 
+          error_description: userError instanceof Error ? userError.message : 'Failed to create user session' 
+        });
+      }
     } catch (error) {
       console.error('[ERROR] Token validation error:', error);
       res.status(401).json({ error: 'invalid_token', error_description: 'Token validation failed' });
     }
   }
-
-  // 存储SSE连接的Map
-  const sseConnections = new Map();
 
   // 存储外部传入的 MCP 服务器实例
   let externalMcpServer: McpServer | null = null;
@@ -425,26 +473,13 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
   // Handle SSE endpoint for POST - 建立长连接
   async function handleSSEConnection(req: Request, res: Response): Promise<void> {
     const sessionId = crypto.randomUUID();
-    console.log(`[DEBUG] Creating SSE session: ${sessionId}`);
     
-    // 打印SSE连接的请求头
-    console.log(`[DEBUG] === SSE Connection Headers ===`);
-    console.log(`[DEBUG] SSE Request URL: ${req.method} ${req.url}`);
-    console.log(`[DEBUG] SSE Request Headers:`, JSON.stringify(req.headers, null, 2));
-    console.log(`[DEBUG] SSE Authorization: ${req.headers.authorization || 'NOT_FOUND'}`);
-    console.log(`[DEBUG] User Info:`, req.user ? {
-      client_id: req.user.client_id,
-      lark_user_id: (req.user as any).lark_user_id,
-      lark_user_name: (req.user as any).lark_user_name
-    } : 'NOT_AUTHENTICATED');
-    console.log(`[DEBUG] === End SSE Headers ===`);
-
-    // 确保larkClient有最新的用户token
-    if (req.user && (req.user as any).accessToken && globalLarkClient && globalLarkClient.updateUserAccessToken) {
-      const currentToken = (req.user as any).accessToken;
-      console.log(`[DEBUG] Updating larkClient token in SSE connection: ${currentToken.substring(0, 20)}...${currentToken.substring(currentToken.length - 10)}`);
-      globalLarkClient.updateUserAccessToken(currentToken);
-    }
+    // 获取用户信息
+    const userId = requireUserId(req);
+    const userSession = (req.user as any)?.userSession;
+    
+    console.log(`[DEBUG] Creating SSE session: ${sessionId} for user: ${userId}`);
+    console.log(`[DEBUG] User Info: userId=${userId}, userName=${getUserName(req)}`);
 
     try {
       // 使用传入的 mcpServer 而不是创建新的 Server 实例
@@ -454,20 +489,33 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
         return;
       }
 
-      // 获取传入的 mcpServer 实例
-      const server = externalMcpServer;
-
-      // 创建 SSE Transport - 让它自己处理响应头
+      // 创建 SSE Transport
       const transport = new SSEServerTransport('/messages', res);
 
-      // 存储连接信息
-      sseConnections.set(sessionId, { transport, server, response: res, clientId: req.user?.client_id });
+      // 创建连接信息
+      const connectionInfo = {
+        sessionId,
+        transport,
+        response: res,
+        userId,
+        clientId: req.user?.client_id,
+        createdAt: Date.now(),
+      };
 
-      console.log(`[DEBUG] Connecting MCP server to SSE transport (active connections: ${sseConnections.size})`);
+      // 使用UserManager添加连接
+      try {
+        userManager.addConnection(userId, connectionInfo);
+        console.log(`[DEBUG] Added connection to UserManager for user ${userId} (session: ${sessionId})`);
+      } catch (error) {
+        console.error('[ERROR] Failed to add connection to UserManager:', error);
+        res.status(500).json({ error: 'Failed to register connection' });
+        return;
+      }
 
       // 连接 server 和 transport
-      await server.connect(transport);
+      await externalMcpServer.connect(transport);
       console.log(`[DEBUG] MCP server connected to SSE transport successfully for session: ${sessionId}`);
+      console.log(`[DEBUG] User manager stats - Active users: ${userManager.getActiveUserCount()}, Total connections: ${userManager.getTotalConnectionCount()}`);
 
       // 发送端点信息给客户端
       res.write(`event: endpoint\n`);
@@ -485,51 +533,38 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
 
       // 处理连接关闭
       req.on('close', () => {
-        console.log(
-          `[DEBUG] SSE connection closed for session: ${sessionId} (remaining connections: ${sseConnections.size - 1})`,
-        );
-        sseConnections.delete(sessionId);
-        // 注意：不要调用 server.close()，因为这是共享的 mcpServer 实例
+        console.log(`[DEBUG] SSE connection closed for session: ${sessionId}`);
+        userManager.removeConnection(userId, sessionId);
       });
 
-      // 处理错误
       req.on('error', (error: any) => {
-        // 对常见的网络断开错误进行优雅处理
         if (error.code === 'ECONNRESET' || error.code === 'ECONNABORTED') {
-          console.log(
-            `[INFO] SSE connection closed by client for session ${sessionId} (${error.code}) (remaining connections: ${sseConnections.size - 1})`,
-          );
+          console.log(`[INFO] SSE connection closed by client for session ${sessionId} (${error.code})`);
         } else {
           console.error(`[ERROR] SSE connection error for session ${sessionId}:`, error);
         }
-        sseConnections.delete(sessionId);
-        // 注意：不要调用 server.close()，因为这是共享的 mcpServer 实例
+        userManager.removeConnection(userId, sessionId);
       });
 
       res.on('error', (error: any) => {
-        // 对常见的网络断开错误进行优雅处理
         if (error.code === 'ECONNRESET' || error.code === 'ECONNABORTED') {
-          console.log(
-            `[INFO] SSE response connection closed by client for session ${sessionId} (${error.code}) (remaining connections: ${sseConnections.size - 1})`,
-          );
+          console.log(`[INFO] SSE response connection closed by client for session ${sessionId} (${error.code})`);
         } else {
           console.error(`[ERROR] SSE response error for session ${sessionId}:`, error);
         }
-        sseConnections.delete(sessionId);
-        // 注意：不要调用 server.close()，因为这是共享的 mcpServer 实例
+        userManager.removeConnection(userId, sessionId);
       });
 
-      // 保持连接活跃 - 减少 ping 频率以避免过多的网络活动
+      // 保持连接活跃
       const keepAlive = setInterval(() => {
         if (res.writable) {
           res.write(`event: ping\n`);
           res.write(`data: ${Date.now()}\n\n`);
         } else {
           clearInterval(keepAlive);
-          sseConnections.delete(sessionId);
-          // 注意：不要调用 server.close()，因为这是共享的 mcpServer 实例
+          userManager.removeConnection(userId, sessionId);
         }
-      }, 30000); // 每30秒发送一次ping，减少网络负载
+      }, 30000);
     } catch (error) {
       console.error('[ERROR] Failed to connect MCP server to SSE transport:', error);
       if (!res.headersSent) {
@@ -541,41 +576,26 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
   // Handle POST messages to /messages endpoint
   async function handlePostMessage(req: Request, res: Response): Promise<void> {
     const sessionId = req.query.sessionId as string;
-    console.log(`[DEBUG] Received POST message for session: ${sessionId}`);
+    const userId = requireUserId(req);
     
-    // 打印POST消息的请求头
-    console.log(`[DEBUG] === POST Message Headers ===`);
-    console.log(`[DEBUG] POST Request URL: ${req.method} ${req.url}`);
-    console.log(`[DEBUG] POST Query Parameters:`, req.query);
-    console.log(`[DEBUG] POST Request Headers:`, JSON.stringify(req.headers, null, 2));
-    console.log(`[DEBUG] POST Authorization: ${req.headers.authorization || 'NOT_FOUND'}`);
-    console.log(`[DEBUG] POST Body Preview:`, req.body ? JSON.stringify(req.body).substring(0, 200) + '...' : 'NO_BODY');
-    console.log(`[DEBUG] User Info:`, req.user ? {
-      client_id: req.user.client_id,
-      lark_user_id: (req.user as any).lark_user_id,
-      lark_user_name: (req.user as any).lark_user_name
-    } : 'NOT_AUTHENTICATED');
-    console.log(`[DEBUG] === End POST Headers ===`);
-
-    // 确保larkClient有最新的用户token
-    if (req.user && (req.user as any).accessToken && globalLarkClient && globalLarkClient.updateUserAccessToken) {
-      const currentToken = (req.user as any).accessToken;
-      console.log(`[DEBUG] Updating larkClient token in POST message: ${currentToken.substring(0, 20)}...${currentToken.substring(currentToken.length - 10)}`);
-      globalLarkClient.updateUserAccessToken(currentToken);
-    }
+    console.log(`[DEBUG] Received POST message for session: ${sessionId}, user: ${userId}`);
 
     if (!sessionId) {
       res.status(400).json({ error: 'Missing sessionId parameter' });
       return;
     }
 
-    const connection = sseConnections.get(sessionId);
-    if (!connection) {
-      res.status(404).json({ error: 'Session not found' });
-      return;
-    }
-
     try {
+      // 使用UserManager查找连接
+      const userConnections = userManager.getActiveConnections(userId);
+      const connection = userConnections.find(conn => conn.sessionId === sessionId);
+      
+      if (!connection) {
+        console.log(`[DEBUG] Session not found: ${sessionId} for user: ${userId}`);
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+
       // 将消息传递给SSE transport处理
       await connection.transport.handlePostMessage(req, res, req.body);
     } catch (error) {
