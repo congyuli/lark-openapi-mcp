@@ -8,6 +8,7 @@ import { OAuthServer } from './oauth/oauth-server';
 import { AuthMiddleware } from './middleware/auth-middleware';
 import { SSEHandler } from './handlers/sse-handler';
 import { ServerRoutes } from './routes/server-routes';
+import { setGlobalUserManager } from '../mcp-tool/utils/handler';
 
 // Check environment variables on startup
 const envCheck = checkRequiredEnvVars();
@@ -23,18 +24,65 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
   const PORT = options.port || 3000;
   const host = options.host || 'localhost';
 
-  // 创建UserManager实例
+  // 创建UserManager实例，改进LarkClient创建逻辑
   const userManager = new UserManager(async (accessToken: string) => {
-    // 创建用户专属的LarkClient实例
+    console.log(`[SERVER] Creating user-specific LarkClient for token: ${accessToken.substring(0, 20)}...`);
+    
     if (larkClient && typeof larkClient.createUserClient === 'function') {
-      return await larkClient.createUserClient(accessToken);
-    } else {
-      // 简化的LarkClient创建，如果原始larkClient不支持createUserClient
-      const userLarkClient = { ...larkClient };
-      if (userLarkClient.updateUserAccessToken) {
-        userLarkClient.updateUserAccessToken(accessToken);
+      // 使用LarkMcpTool的createUserClient方法创建用户专属实例
+      try {
+        const userLarkClient = await larkClient.createUserClient(accessToken);
+        console.log(`[SERVER] ✅ Created user-specific LarkClient using createUserClient method`);
+        return userLarkClient;
+      } catch (error) {
+        console.error(`[SERVER] ❌ Failed to create user-specific LarkClient:`, error);
+        throw error;
       }
-      return userLarkClient;
+    } else {
+      console.log(`[SERVER] ⚠️ LarkClient does not support createUserClient, using fallback method`);
+      
+      // 兼容性处理：如果原始larkClient不支持createUserClient
+      // 创建一个用户专属的 LarkClient 副本
+      if (larkClient) {
+        try {
+          // 尝试创建一个深拷贝而不是浅拷贝
+          const userLarkClient = Object.create(Object.getPrototypeOf(larkClient));
+          
+          // 复制所有属性
+          Object.assign(userLarkClient, larkClient);
+          
+          // 如果有getClientOptions方法，使用它来重新创建Client
+          if (typeof larkClient.getClientOptions === 'function') {
+            const clientOptions = larkClient.getClientOptions();
+            console.log(`[SERVER] 🔄 Recreating LarkClient with options for user isolation`);
+            
+            // 动态导入LarkMcpTool并创建新实例
+            const { LarkMcpTool } = await import('../mcp-tool');
+            const newUserClient = new LarkMcpTool({
+              ...clientOptions,
+              client: undefined, // 强制创建新的Client实例
+            });
+            
+            newUserClient.updateUserAccessToken(accessToken);
+            console.log(`[SERVER] ✅ Created isolated LarkClient using recreation method`);
+            return newUserClient;
+          }
+          
+          // 最后的fallback：更新token
+          if (userLarkClient.updateUserAccessToken) {
+            userLarkClient.updateUserAccessToken(accessToken);
+            console.log(`[SERVER] ⚠️ Using token update fallback (not fully isolated)`);
+          }
+          
+          return userLarkClient;
+        } catch (error) {
+          console.error(`[SERVER] ❌ Failed to create user LarkClient copy:`, error);
+          throw error;
+        }
+      } else {
+        console.error(`[SERVER] ❌ No LarkClient provided, cannot create user-specific instance`);
+        throw new Error('No LarkClient available for user session creation');
+      }
     }
   });
 
@@ -115,5 +163,9 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
   app.listen(PORT, host, () => {
     console.log(`MCP SSE Server with OAuth running on ${host}:${PORT}`);
     serverRoutes.logEndpoints(host);
+    
+    // 设置全局 UserManager 引用，让工具执行时能获取用户专属的 LarkClient
+    console.log(`[SERVER] 🔧 Setting global UserManager reference for tool execution...`);
+    setGlobalUserManager(userManager);
   });
 }

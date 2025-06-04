@@ -183,12 +183,11 @@ export class UserManager implements IUserManager {
   }
 
   getTotalConnectionCount(): number {
-    let total = 0;
-    // 使用兼容的Map迭代语法
-    this.users.forEach((userSession) => {
-      total += userSession.connections.size;
-    });
-    return total;
+    let totalConnections = 0;
+    for (const session of this.users.values()) {
+      totalConnections += session.connections.size;
+    }
+    return totalConnections;
   }
 
   // 会话查询方法 - 用于轻量级认证
@@ -212,18 +211,27 @@ export class UserManager implements IUserManager {
     return null;
   }
 
-  findUserByTokenPrefix(tokenPrefix: string, minPrefixLength: number = 25): { userId: string; userSession: UserSession } | null {
-    // 通过token前缀查找用户（用于轻量级验证）
-    if (tokenPrefix.length < minPrefixLength) {
-      return null; // 前缀太短，不安全
-    }
-    
-    for (const [userId, userSession] of this.users) {
-      if (userSession.accessToken.startsWith(tokenPrefix)) {
-        return { userId, userSession };
+  /**
+   * 通过访问令牌前缀查找用户信息
+   * 用于工具执行时根据 userAccessToken 查找对应的用户会话
+   * @param tokenPrefix Token 前缀（通常取前25个字符用于匹配）
+   * @returns 用户信息和会话，如果找到的话
+   */
+  findUserByTokenPrefix(tokenPrefix: string): { userId: string; userSession: UserSession } | null {
+    try {
+      for (const [userId, userSession] of this.users.entries()) {
+        if (userSession.accessToken && userSession.accessToken.startsWith(tokenPrefix)) {
+          console.log(`[UserManager] 🔍 Found user ${userId} by token prefix: ${tokenPrefix.substring(0, 20)}...`);
+          return { userId, userSession };
+        }
       }
+      
+      console.log(`[UserManager] ⚠️ No user found for token prefix: ${tokenPrefix.substring(0, 20)}...`);
+      return null;
+    } catch (error) {
+      console.error(`[UserManager] ❌ Error finding user by token prefix:`, error);
+      return null;
     }
-    return null;
   }
 
   getAllActiveUserTokens(): string[] {
