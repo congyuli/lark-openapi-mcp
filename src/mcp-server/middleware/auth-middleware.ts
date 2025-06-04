@@ -153,19 +153,83 @@ export class AuthMiddleware {
     const token = authHeader.substring(7);
     console.log(`[DEBUG] Session auth token: ${token.substring(0, 20)}...${token.substring(token.length - 10)}`);
 
+    // 尝试从请求中获取sessionId
+    const sessionId = req.query.sessionId as string;
+    console.log(`[DEBUG] Session ID from query: ${sessionId || 'NOT_FOUND'}`);
+
     try {
-      // 简化的会话验证：直接尝试从 token 中提取用户信息
-      // 如果 token 有效且用户会话存在，则使用缓存的会话
-      // 否则降级到完整认证
+      let foundUser = null;
       
-      // 这里我们暂时降级到完整认证，因为我们需要用户ID来查找会话
-      // 但我们不想每次都调用 Lark API
-      console.log(`[DEBUG] ⚠️ Session auth: Using full auth for now (will optimize later)`);
-      return this.authenticateToken(req, res, next);
+      // 策略1: 优先通过sessionId快速查找（最快最准确）
+      if (sessionId) {
+        foundUser = this.userManager.findUserBySessionId(sessionId);
+        if (foundUser) {
+          console.log(`[DEBUG] 🎯 Found user by sessionId: ${foundUser.userId}`);
+          
+          // 验证token是否匹配（防止token被替换）
+          if (foundUser.userSession.accessToken === token) {
+            console.log(`[DEBUG] ✅ Token matches cached session - using lightweight auth`);
+          } else {
+            console.log(`[DEBUG] ⚠️ Token mismatch! Cached: ${foundUser.userSession.accessToken.substring(0, 20)}..., Provided: ${token.substring(0, 20)}...`);
+            console.log(`[DEBUG] 🔄 Token may have been refreshed, falling back to full auth`);
+            foundUser = null; // token不匹配，需要重新认证
+          }
+        }
+      }
+      
+      // 策略2: 通过完整token查找
+      if (!foundUser) {
+        foundUser = this.userManager.findUserByToken(token);
+        if (foundUser) {
+          console.log(`[DEBUG] 🎯 Found user by exact token: ${foundUser.userId}`);
+        }
+      }
+      
+      // 策略3: 通过token前缀查找（适用于token轻微变化的情况）
+      if (!foundUser) {
+        const tokenPrefix = token.substring(0, 30); // 取前30个字符作为前缀
+        foundUser = this.userManager.findUserByTokenPrefix(tokenPrefix);
+        if (foundUser) {
+          console.log(`[DEBUG] 🎯 Found user by token prefix: ${foundUser.userId}`);
+          console.log(`[DEBUG] 🔄 Token prefix match, but will verify with full auth for security`);
+          foundUser = null; // 前缀匹配不够安全，降级到完整认证
+        }
+      }
+
+      if (foundUser) {
+        // 找到缓存的用户会话，直接使用
+        req.user = {
+          client_id: 'lark_user',
+          scope: 'mcp',
+          accessToken: token,
+          lark_user_id: foundUser.userId,
+          lark_user_name: foundUser.userSession.userName,
+          userSession: foundUser.userSession,
+        };
+
+        // 添加用户会话辅助方法
+        addUserSessionMethods(req);
+
+        // 更新最后活跃时间
+        foundUser.userSession.lastActiveTime = Date.now();
+
+        console.log(`[DEBUG] ✅ Lightweight session auth success: ${foundUser.userId} (SKIPPED Lark API call)`);
+        console.log(`[DEBUG] 📊 Active users: ${this.userManager.getActiveUserCount()}, Total connections: ${this.userManager.getTotalConnectionCount()}`);
+        
+        next();
+      } else {
+        // 没有找到缓存会话，降级到完整认证
+        console.log(`[DEBUG] 🔄 No cached session found, falling back to full authentication`);
+        
+        // 调试信息：显示当前所有活跃token（仅显示前缀）
+        const activeTokens = this.userManager.getAllActiveUserTokens();
+        console.log(`[DEBUG] 📋 Active tokens in system: ${activeTokens.map(t => t.substring(0, 20) + '...').join(', ')}`);
+        
+        return this.authenticateToken(req, res, next);
+      }
       
     } catch (error) {
       console.error('[ERROR] Session validation error:', error);
-      // 出错时降级到完整认证
       console.log(`[DEBUG] ⚠️ Session auth error, falling back to full auth`);
       return this.authenticateToken(req, res, next);
     }

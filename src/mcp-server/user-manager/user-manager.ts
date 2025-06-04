@@ -191,6 +191,50 @@ export class UserManager implements IUserManager {
     return total;
   }
 
+  // 会话查询方法 - 用于轻量级认证
+  findUserBySessionId(sessionId: string): { userId: string; userSession: UserSession } | null {
+    // 遍历所有用户，查找包含指定sessionId的用户
+    for (const [userId, userSession] of this.users) {
+      if (userSession.connections.has(sessionId)) {
+        return { userId, userSession };
+      }
+    }
+    return null;
+  }
+
+  findUserByToken(token: string): { userId: string; userSession: UserSession } | null {
+    // 通过完整token查找用户
+    for (const [userId, userSession] of this.users) {
+      if (userSession.accessToken === token) {
+        return { userId, userSession };
+      }
+    }
+    return null;
+  }
+
+  findUserByTokenPrefix(tokenPrefix: string, minPrefixLength: number = 25): { userId: string; userSession: UserSession } | null {
+    // 通过token前缀查找用户（用于轻量级验证）
+    if (tokenPrefix.length < minPrefixLength) {
+      return null; // 前缀太短，不安全
+    }
+    
+    for (const [userId, userSession] of this.users) {
+      if (userSession.accessToken.startsWith(tokenPrefix)) {
+        return { userId, userSession };
+      }
+    }
+    return null;
+  }
+
+  getAllActiveUserTokens(): string[] {
+    // 获取所有活跃用户的token列表（用于调试）
+    const tokens: string[] = [];
+    this.users.forEach((userSession) => {
+      tokens.push(userSession.accessToken);
+    });
+    return tokens;
+  }
+
   // 私有方法
   private async createUserLarkClient(accessToken: string): Promise<any> {
     try {
