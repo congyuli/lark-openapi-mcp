@@ -471,7 +471,7 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
 
       // 发送端点信息给客户端
       res.write(`event: endpoint\n`);
-      res.write(`data: http://localhost:${PORT}/messages?sessionId=${sessionId}\n\n`);
+      res.write(`data: http://${req.get('host') || 'localhost:' + PORT}/messages?sessionId=${sessionId}\n\n`);
 
       // 发送初始化成功消息
       res.write(`event: message\n`);
