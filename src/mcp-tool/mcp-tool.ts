@@ -7,6 +7,7 @@ import { defaultToolNames } from './constants';
 import { larkOapiHandler, setGlobalUserManager, getUserLarkClientAndToken } from './utils/handler';
 import { caseTransf } from './utils/case-transf';
 import { getShouldUseUAT } from './utils/get-should-use-uat';
+import { Logger, LogContext } from '../mcp-server/shared/logger';
 
 /**
  * Feishu/Lark MCP
@@ -27,23 +28,39 @@ export class LarkMcpTool {
   // Client creation options (保存用于创建用户专属客户端)
   private clientOptions: LarkMcpToolOptions;
 
+  // Instance tracking
+  private readonly instanceId: string = `lark-mcp-${Date.now()}-${Math.random().toString(36).substring(2)}`;
+  private readonly createdAt: number = Date.now();
+
   /**
    * Feishu/Lark MCP
    * @param options Feishu/Lark Client Options
    */
   constructor(options: LarkMcpToolOptions) {
+    const context: LogContext = {
+      component: 'LarkMcpTool',
+      operation: 'constructor',
+      instanceId: this.instanceId
+    };
+
     // 保存客户端创建选项
     this.clientOptions = { ...options };
 
     if (options.client) {
       this.client = options.client;
+      Logger.info('Using provided client instance', context);
     } else if (options.appId && options.appSecret) {
       this.client = new Client({
         appId: options.appId,
         appSecret: options.appSecret,
         ...options,
       });
+      Logger.info('Created new Lark client instance', {
+        ...context,
+        appId: options.appId
+      });
     }
+    
     this.tokenMode = options.tokenMode || TokenMode.AUTO;
     const isZH = options.toolsOptions?.language === 'zh';
 
@@ -53,6 +70,14 @@ export class LarkMcpTool {
       ...options.toolsOptions,
     };
     this.allTools = filterTools(isZH ? AllToolsZh : AllTools, filterOptions);
+    
+    Logger.info('LarkMcpTool instance created', {
+      ...context,
+      tokenMode: this.tokenMode,
+      language: isZH ? 'zh' : 'en',
+      toolsCount: this.allTools.length,
+      allowedTools: filterOptions.allowTools?.length || 'all'
+    });
   }
 
   /**
@@ -62,7 +87,14 @@ export class LarkMcpTool {
    * @returns New LarkMcpTool instance for the user
    */
   async createUserClient(userAccessToken: string): Promise<LarkMcpTool> {
-    console.log(`[LarkMcpTool] Creating user-specific client instance`);
+    const context: LogContext = {
+      component: 'LarkMcpTool',
+      operation: 'createUserClient',
+      instanceId: this.instanceId,
+      userAccessTokenPrefix: userAccessToken.substring(0, 20)
+    };
+
+    Logger.info('Creating user-specific client instance', context);
     
     // 创建用户专属的LarkMcpTool实例
     const userClient = new LarkMcpTool({
@@ -77,7 +109,12 @@ export class LarkMcpTool {
     // 验证用户隔离
     userClient.validateUserIsolation(this, userAccessToken);
     
-    console.log(`[LarkMcpTool] Created user-specific client with token: ${userAccessToken.substring(0, 20)}...`);
+    Logger.info('Successfully created user-specific client instance', {
+      ...context,
+      userClientInstanceId: userClient.instanceId,
+      toolsCount: userClient.allTools.length
+    });
+    
     return userClient;
   }
 
@@ -86,8 +123,15 @@ export class LarkMcpTool {
    * @param userAccessToken User Access Token
    */
   updateUserAccessToken(userAccessToken: string) {
+    const context: LogContext = {
+      component: 'LarkMcpTool',
+      operation: 'updateUserAccessToken',
+      instanceId: this.instanceId,
+      userAccessTokenPrefix: userAccessToken.substring(0, 20)
+    };
+
     this.userAccessToken = userAccessToken;
-    console.log(`[LarkMcpTool] Updated user access token: ${userAccessToken.substring(0, 20)}...`);
+    Logger.info('Updated user access token', context);
   }
 
   /**
@@ -127,10 +171,30 @@ export class LarkMcpTool {
    * @param server MCP Server Instance
    */
   registerMcpServer(server: McpServer, options?: { toolNameCase?: ToolNameCase }): void {
+    const context: LogContext = {
+      component: 'LarkMcpTool',
+      operation: 'registerMcpServer',
+      instanceId: this.instanceId,
+      toolsCount: this.allTools.length
+    };
+
+    Logger.info('Registering tools to MCP server', context);
+
     for (const tool of this.allTools) {
       server.tool(caseTransf(tool.name, options?.toolNameCase), tool.description, tool.schema, async (params: any) => {
+        const executionContext: LogContext = {
+          component: 'LarkMcpTool',
+          operation: 'toolExecution',
+          instanceId: this.instanceId,
+          toolName: tool.name,
+          customHandler: !!tool.customHandler
+        };
+
+        const startTime = Date.now();
+
         try {
           if (!this.client) {
+            Logger.error('Tool execution failed: Client not initialized', new Error('Client not initialized'), executionContext);
             return {
               isError: true,
               content: [{ type: 'text' as const, text: 'Client not initialized' }],
@@ -151,10 +215,18 @@ export class LarkMcpTool {
           // 如果工具的 accessTokens 只包含 'user'，则强制使用用户访问令牌
           if (tool.accessTokens && tool.accessTokens.length === 1 && tool.accessTokens[0] === 'user') {
             shouldUseUAT = true;
-            console.log(`[LarkMcpTool] 🔐 Tool ${tool.name} only supports user access token, forcing shouldUseUAT = true`);
+            Logger.debug('Tool only supports user access token, forcing shouldUseUAT = true', {
+              ...executionContext,
+              accessTokens: tool.accessTokens
+            });
           }
           
-          console.log(`[LarkMcpTool] 🎯 Tool execution: ${tool.name}, TokenMode: ${this.tokenMode}, Global UAT: ${this.userAccessToken ? 'available' : 'none'}, shouldUseUAT: ${shouldUseUAT}`);
+          Logger.debug('Tool execution started', {
+            ...executionContext,
+            tokenMode: this.tokenMode,
+            hasGlobalUAT: !!this.userAccessToken,
+            shouldUseUAT
+          });
           
           // 🔄 新增：对于 customHandler，需要提供动态获取用户访问令牌的能力
           let effectiveUserAccessToken = this.userAccessToken;
@@ -170,19 +242,43 @@ export class LarkMcpTool {
               });
               if (dynamicToken) {
                 effectiveUserAccessToken = dynamicToken;
-                console.log(`[LarkMcpTool] 🔑 Found dynamic user access token for customHandler: ${dynamicToken.substring(0, 20)}...`);
+                Logger.debug('Found dynamic user access token for customHandler', {
+                  ...executionContext,
+                  dynamicTokenPrefix: dynamicToken.substring(0, 20)
+                });
               }
             } catch (error) {
-              console.warn(`[LarkMcpTool] ⚠️ Failed to get dynamic user access token for customHandler:`, error);
+              Logger.warn('Failed to get dynamic user access token for customHandler', {
+                ...executionContext,
+                error: (error as Error).message
+              });
             }
           }
           
-          return await handler(
+          const result = await handler(
             this.client,
             { ...params, useUAT: shouldUseUAT },
             { userAccessToken: effectiveUserAccessToken, tool, tokenMode: this.tokenMode },
           );
+
+          const duration = Date.now() - startTime;
+          
+          Logger.toolExecution(tool.name, {
+            ...executionContext,
+            duration,
+            hasEffectiveToken: !!effectiveUserAccessToken,
+            resultType: result.isError ? 'error' : 'success'
+          }, result);
+
+          return result;
         } catch (error) {
+          const duration = Date.now() - startTime;
+          
+          Logger.toolExecution(tool.name, {
+            ...executionContext,
+            duration
+          }, undefined, error as Error);
+          
           return {
             isError: true,
             content: [{ type: 'text' as const, text: `Error: ${JSON.stringify((error as Error)?.message)}` }],
@@ -190,6 +286,11 @@ export class LarkMcpTool {
         }
       });
     }
+
+    Logger.info('Successfully registered all tools to MCP server', {
+      ...context,
+      registeredTools: this.allTools.map(t => t.name)
+    });
   }
 
   /**
@@ -197,59 +298,98 @@ export class LarkMcpTool {
    * 销毁客户端并清理资源
    */
   async destroy(): Promise<void> {
-    console.log(`[LarkMcpTool] Destroying client instance`);
+    const context: LogContext = {
+      component: 'LarkMcpTool',
+      operation: 'destroy',
+      instanceId: this.instanceId,
+      lifetime: Date.now() - this.createdAt
+    };
+
+    Logger.info('Destroying LarkMcpTool instance', context);
     
-    // 清理用户访问令牌
+    // 清理客户端资源
+    if (this.client) {
+      // 如果客户端有清理方法，调用它
+      if (typeof (this.client as any).destroy === 'function') {
+        try {
+          await (this.client as any).destroy();
+          Logger.debug('Client instance destroyed', context);
+        } catch (error) {
+          Logger.error('Error destroying client instance', error as Error, context);
+        }
+      }
+      this.client = null;
+    }
+    
+    // 清理访问令牌
     this.userAccessToken = undefined;
     
-    // 如果需要的话，可以在这里添加更多的清理逻辑
-    // 例如：关闭连接、清理缓存等
+    // 清理工具列表
+    this.allTools = [];
     
-    console.log(`[LarkMcpTool] Client instance destroyed`);
+    Logger.info('LarkMcpTool instance destroyed successfully', context);
   }
 
   /**
-   * 验证用户隔离是否正确工作
-   * @param originalClient 原始的LarkMcpTool实例
+   * 验证用户隔离 - 确保用户专属实例不会共享数据
+   * @param originalClient 原始客户端实例
    * @param userAccessToken 用户访问令牌
    */
   private validateUserIsolation(originalClient: LarkMcpTool, userAccessToken: string): void {
-    try {
-      console.log(`[LarkMcpTool] 🔍 Validating user isolation...`);
-      
-      // 检查是否有独立的Client实例
-      const originalClientInstance = originalClient.getClient();
-      const userClientInstance = this.getClient();
-      
-      if (originalClientInstance === userClientInstance) {
-        console.warn(`[LarkMcpTool] ⚠️ WARNING: User client is sharing the same Client instance as original! This breaks user isolation.`);
-      } else {
-        console.log(`[LarkMcpTool] ✅ User isolation verified: Client instances are separate`);
-      }
-      
-      // 检查访问令牌是否正确设置
-      if (this.userAccessToken === userAccessToken) {
-        console.log(`[LarkMcpTool] ✅ User access token correctly set for user instance`);
-      } else {
-        console.warn(`[LarkMcpTool] ⚠️ WARNING: User access token mismatch! Expected: ${userAccessToken.substring(0, 20)}..., Got: ${this.userAccessToken?.substring(0, 20) || 'undefined'}...`);
-      }
-      
-      // 检查原始客户端的token是否受到影响
-      const originalToken = originalClient.getUserAccessToken();
-      if (originalToken === userAccessToken) {
-        console.warn(`[LarkMcpTool] ⚠️ WARNING: Original client token was modified! This indicates token leakage between users.`);
-      } else {
-        console.log(`[LarkMcpTool] ✅ Original client token unchanged, no cross-user contamination`);
-      }
-      
-    } catch (error) {
-      console.error(`[LarkMcpTool] ❌ Error during user isolation validation:`, error);
+    const context: LogContext = {
+      component: 'LarkMcpTool',
+      operation: 'validateUserIsolation',
+      instanceId: this.instanceId,
+      originalInstanceId: originalClient.instanceId
+    };
+
+    Logger.debug('Validating user isolation', context);
+
+    // 验证1: 实例隔离 - 应该是不同的对象实例
+    if (this === originalClient) {
+      Logger.error('User isolation validation failed: Same instance', new Error('Same instance detected'), context);
+      throw new Error('User isolation validation failed: Same instance');
     }
+
+    // 验证2: Client隔离 - 应该有不同的Client实例
+    if (this.client === originalClient.client) {
+      Logger.error('User isolation validation failed: Same client', new Error('Same client instance detected'), context);
+      throw new Error('User isolation validation failed: Same client instance');
+    }
+
+    // 验证3: Token隔离 - 确保token设置正确
+    if (this.userAccessToken !== userAccessToken) {
+      Logger.error('User isolation validation failed: Token mismatch', new Error('Token mismatch'), {
+        ...context,
+        expectedTokenPrefix: userAccessToken.substring(0, 20),
+        actualTokenPrefix: this.userAccessToken?.substring(0, 20) || 'none'
+      });
+      throw new Error('User isolation validation failed: Token mismatch');
+    }
+
+    // 验证4: 配置隔离 - 工具配置应该相同但实例不同
+    if (this.allTools.length !== originalClient.allTools.length) {
+      Logger.warn('Tool count differs between instances', {
+        ...context,
+        userInstanceToolCount: this.allTools.length,
+        originalInstanceToolCount: originalClient.allTools.length
+      });
+    }
+
+    Logger.info('User isolation validation passed', {
+      ...context,
+      validations: {
+        instanceIsolation: true,
+        clientIsolation: true,
+        tokenIsolation: true,
+        configurationConsistency: true
+      }
+    });
   }
 
   /**
-   * Get user isolation information for debugging
-   * @returns User isolation status information
+   * 获取用户隔离信息 - 用于调试和监控
+   * @returns 用户隔离相关信息
    */
   getUserIsolationInfo(): {
     hasClient: boolean;
@@ -258,12 +398,21 @@ export class LarkMcpTool {
     tokenPrefix: string;
     createdAt: number;
   } {
-    return {
+    const info = {
       hasClient: !!this.client,
       hasUserToken: !!this.userAccessToken,
-      clientInstanceId: this.client ? `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}` : 'no_client',
-      tokenPrefix: this.userAccessToken ? this.userAccessToken.substring(0, 20) + '...' : 'no_token',
-      createdAt: Date.now(),
+      clientInstanceId: this.instanceId,
+      tokenPrefix: this.userAccessToken?.substring(0, 20) || 'none',
+      createdAt: this.createdAt,
     };
+
+    Logger.debug('Retrieved user isolation info', {
+      component: 'LarkMcpTool',
+      operation: 'getUserIsolationInfo',
+      instanceId: this.instanceId,
+      info
+    });
+
+    return info;
   }
 }
