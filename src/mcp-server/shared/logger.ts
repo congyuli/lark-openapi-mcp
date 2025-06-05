@@ -68,36 +68,40 @@ const customFormat = winston.format.combine(
   })
 );
 
-// 创建日志器实例
-export const logger = winston.createLogger({
-  level: process.env.LOG_LEVEL || 'info',
-  format: customFormat,
-  transports: [
-    // 控制台输出 (开发环境)
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.simple(),
-        winston.format.printf(({ timestamp, level, message, userId, sessionId, component, ...meta }) => {
-          let logStr = `${timestamp} [${level}]`;
-          
-          // 添加上下文标识
-          if (component) logStr += ` [${component}]`;
-          if (userId) logStr += ` [User:${userId}]`;
-          if (sessionId && typeof sessionId === 'string') logStr += ` [Session:${sessionId.substring(0, 8)}...]`;
-          
-          logStr += ` ${message}`;
-          
-          // 添加额外元数据
-          if (Object.keys(meta).length > 0) {
-            logStr += ` ${JSON.stringify(meta)}`;
-          }
-          
-          return logStr;
-        })
-      )
-    }),
-    
+// 检查是否禁用文件日志
+const disableFileLogging = process.env.DISABLE_FILE_LOGGING === 'true';
+
+// 创建transports数组
+const transports: winston.transport[] = [
+  // 控制台输出
+  new winston.transports.Console({
+    format: winston.format.combine(
+      winston.format.colorize(),
+      winston.format.simple(),
+      winston.format.printf(({ timestamp, level, message, userId, sessionId, component, ...meta }) => {
+        let logStr = `${timestamp} [${level}]`;
+        
+        // 添加上下文标识
+        if (component) logStr += ` [${component}]`;
+        if (userId) logStr += ` [User:${userId}]`;
+        if (sessionId && typeof sessionId === 'string') logStr += ` [Session:${sessionId.substring(0, 8)}...]`;
+        
+        logStr += ` ${message}`;
+        
+        // 添加额外元数据
+        if (Object.keys(meta).length > 0) {
+          logStr += ` ${JSON.stringify(meta)}`;
+        }
+        
+        return logStr;
+      })
+    )
+  })
+];
+
+// 如果没有禁用文件日志，则添加文件输出 (向后兼容)
+if (!disableFileLogging) {
+  transports.push(
     // 文件输出 (生产环境)
     new winston.transports.File({
       filename: path.join(process.cwd(), 'logs', 'error.log'),
@@ -130,21 +134,31 @@ export const logger = winston.createLogger({
         })
       )
     })
-  ],
+  );
+}
+
+// 创建日志器实例
+export const logger = winston.createLogger({
+  level: process.env.LOG_LEVEL || 'info',
+  format: customFormat,
+  transports: transports,
   
-  // 异常处理
-  exceptionHandlers: [
-    new winston.transports.File({
-      filename: path.join(process.cwd(), 'logs', 'exceptions.log')
-    })
-  ],
-  
-  // 拒绝处理
-  rejectionHandlers: [
-    new winston.transports.File({
-      filename: path.join(process.cwd(), 'logs', 'rejections.log')
-    })
-  ]
+  // 只在文件日志启用时添加异常和拒绝处理器
+  ...(disableFileLogging ? {} : {
+    exceptionHandlers: [
+      new winston.transports.Console(),
+      new winston.transports.File({
+        filename: path.join(process.cwd(), 'logs', 'exceptions.log')
+      })
+    ],
+    
+    rejectionHandlers: [
+      new winston.transports.Console(),
+      new winston.transports.File({
+        filename: path.join(process.cwd(), 'logs', 'rejections.log')
+      })
+    ]
+  })
 });
 
 // Logger工具类
@@ -290,11 +304,13 @@ export class PerformanceMonitor {
   }
 }
 
-// 确保日志目录存在
+// 确保日志目录存在（只在需要文件日志时）
 import fs from 'fs';
-const logsDir = path.join(process.cwd(), 'logs');
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
+if (!disableFileLogging) {
+  const logsDir = path.join(process.cwd(), 'logs');
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+  }
 }
 
 // 导出默认logger实例

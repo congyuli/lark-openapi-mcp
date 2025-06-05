@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  lark-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lark-mcp-server
+    ports:
+      - "3000:3000"
+    environment:
+      # Lark应用配置 - 请在.env文件中设置实际值
+      - LARK_APP_ID=${LARK_APP_ID:-}
+      - LARK_APP_SECRET=${LARK_APP_SECRET:-}
+      - LARK_BASE_URL=${LARK_BASE_URL:-https://open.larksuite.com}
+      - LARK_SCOPES=${LARK_SCOPES:-wiki:wiki,wiki:wiki:readonly,wiki:space:retrieve,wiki:space:read,wiki:node:retrieve,drive:drive:readonly,docx:document,docx:document:readonly}
+      # 服务器配置
+      - PORT=${PORT:-3000}
+      - NODE_ENV=${NODE_ENV:-production}
+      # 日志配置 - Docker容器默认禁用文件日志，只输出到控制台
+      - DISABLE_FILE_LOGGING=${DISABLE_FILE_LOGGING:-true}
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "const http = require('http'); const options = { host: 'localhost', port: 3000, path: '/health', timeout: 2000 }; const req = http.request(options, (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }); req.on('error', () => process.exit(1)); req.end();"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    # 可选：如果需要持久化数据，可以添加volumes
+    # volumes:
+    #   - ./data:/app/data
+    
+    # 可选：限制资源使用
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+# 可选：如果需要网络隔离
+# networks:
+#   lark-mcp-network:
+#     driver: bridge 
