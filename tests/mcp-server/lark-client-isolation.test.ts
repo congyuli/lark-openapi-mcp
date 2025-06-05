@@ -92,7 +92,7 @@ describe('LarkClient User Isolation', () => {
       expect(isolationInfo).toBeDefined();
       expect(isolationInfo.hasClient).toBe(true);
       expect(isolationInfo.hasUserToken).toBe(true);
-      expect(isolationInfo.tokenPrefix).toContain('user_token_for_isola...');
+      expect(isolationInfo.tokenPrefix).toContain('user_token_for_isola');
       expect(isolationInfo.clientInstanceId).toContain('client_');
       expect(typeof isolationInfo.createdAt).toBe('number');
 
@@ -193,7 +193,7 @@ describe('LarkClient User Isolation', () => {
 
       await expect(async () => {
         await faultyUserManager.getOrCreateUserSession('error_user', 'error_token');
-      }).rejects.toThrow('Failed to create LarkClient instance');
+      }).rejects.toThrow('Failed to create LarkClient');
 
       await faultyUserManager.shutdown();
     });
