@@ -37,6 +37,8 @@ export enum PresetName {
    * Calendar event management tools
    */
   CALENDAR_DEFAULT = 'preset.calendar.default',
+
+  STORE_HUB_DEFAULT = 'preset.storehub.default',
 }
 
 export const presetLightToolNames: ToolName[] = [
@@ -113,6 +115,81 @@ export const defaultToolNames: ToolName[] = [
   ...presetContactToolNames,
 ];
 
+export const presetStoreHubToolNames: ToolName[] = [
+  // base
+  'bitable.v1.appTable.list',
+  'bitable.v1.appTable.patch',
+  'bitable.v1.app.create',
+  'bitable.v1.app.get',
+  'bitable.v1.appTable.create',
+  'bitable.v1.appTable.delete',
+  'bitable.v1.appTableField.create',
+  'bitable.v1.appTableField.delete',
+  'bitable.v1.appTableField.list',
+  'bitable.v1.appTableField.update',
+  'bitable.v1.appTable.patch',
+  'bitable.v1.appTableRecord.batchCreate',
+  'bitable.v1.appTableRecord.batchDelete',
+  'bitable.v1.appTableRecord.batchGet',
+  'bitable.v1.appTableRecord.batchUpdate',
+  'bitable.v1.appTableRecord.create',
+  'bitable.v1.appTableRecord.delete',
+  'bitable.v1.appTableRecord.get',
+  'bitable.v1.appTableRecord.list',
+  'bitable.v1.appTableRecord.search',
+  'bitable.v1.appTableRecord.update',
+  'bitable.v1.appTableView.create',
+  'bitable.v1.appTableView.delete',
+  'bitable.v1.appTableView.get',
+  'bitable.v1.appTableView.list',
+  'bitable.v1.appTableView.patch',
+  'bitable.v1.app.update',
+  // calendar
+  'calendar.v4.calendarEventAttendee.batchDelete',
+  'calendar.v4.calendarEventAttendeeChatMember.list',
+  'calendar.v4.calendarEventAttendee.create',
+  'calendar.v4.calendarEventAttendee.list',
+  'calendar.v4.calendarEvent.create',
+  'calendar.v4.calendarEvent.delete',
+  'calendar.v4.calendarEvent.get',
+  'calendar.v4.calendarEvent.list',
+  'calendar.v4.calendarEvent.patch',
+  'calendar.v4.calendarEvent.search',
+  'calendar.v4.calendar.get',
+  'calendar.v4.calendar.list',
+  'calendar.v4.calendar.patch',
+  'calendar.v4.calendar.primary',
+  'calendar.v4.freebusy.list',
+  // docs
+  'docs.v1.content.get',
+  // docx
+  'docx.v1.document.create',
+  'docx.v1.document.get',
+  'docx.v1.document.rawContent',
+  'docx.builtin.search',
+  // im
+  'im.v1.chat.create',
+  'im.v1.chat.delete',
+  'im.v1.chat.search',
+  'im.v1.message.create',
+  'im.v1.message.delete',
+  'im.v1.message.forward',
+  'im.v1.message.get',
+  'im.v1.message.list',
+  // task
+  'task.v2.comment.create',
+  'task.v2.comment.delete',
+  'task.v2.comment.get',
+  'task.v2.comment.list',
+  'task.v2.task.create',
+  'task.v2.task.delete',
+  'task.v2.task.get',
+  'task.v2.task.list',
+  'task.v2.task.patch',
+  // wiki
+  'wiki.v1.node.search',
+];
+
 export const presetTools: Record<PresetName, ToolName[]> = {
   [PresetName.LIGHT]: presetLightToolNames,
   [PresetName.DEFAULT]: defaultToolNames,
@@ -122,4 +199,5 @@ export const presetTools: Record<PresetName, ToolName[]> = {
   [PresetName.DOC_DEFAULT]: presetDocToolNames,
   [PresetName.TASK_DEFAULT]: presetTaskToolNames,
   [PresetName.CALENDAR_DEFAULT]: presetCalendarToolNames,
+  [PresetName.STORE_HUB_DEFAULT]: presetStoreHubToolNames,
 };
