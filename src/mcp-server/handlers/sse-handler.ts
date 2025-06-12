@@ -63,7 +63,9 @@ export class SSEHandler {
 
       // 发送端点信息给客户端
       res.write(`event: endpoint\n`);
-      res.write(`data: http://${req.get('host') || 'localhost:' + this.port}/messages?sessionId=${sessionId}\n\n`);
+      const host = req.get('host') || `localhost:${this.port}`;
+      const clientHost = host.startsWith('0.0.0.0:') ? host.replace('0.0.0.0:', 'localhost:') : host;
+      res.write(`data: http://${clientHost}/messages?sessionId=${sessionId}\n\n`);
 
       // 发送初始化成功消息
       res.write(`event: message\n`);
