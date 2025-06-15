@@ -20,16 +20,43 @@ export class StreamableHTTPHandler {
 
   // 处理POST /mcp
   async handlePost(req: Request, res: Response): Promise<void> {
+    // [TOOL_CALL] 打印请求头和关键认证信息
+    console.info('[TOOL_CALL] Incoming /mcp POST request');
+    console.info('[TOOL_CALL] Request headers:', JSON.stringify(req.headers, null, 2));
+    console.info('[TOOL_CALL] Authorization header:', req.headers.authorization || 'NOT_FOUND');
+    console.info('[TOOL_CALL] req.user:', req.user || 'NOT_FOUND');
     const sessionId = req.headers[SESSION_ID_HEADER] as string | undefined;
     let transport: StreamableHTTPServerTransport;
     const userId = requireUserId(req);
     const currentAccessToken = getUserAccessToken(req);
+    console.info('[TOOL_CALL] userId:', userId);
+    console.info('[TOOL_CALL] accessToken:', currentAccessToken ? (currentAccessToken.substring(0, 20) + '...') : 'NOT_FOUND');
 
     try {
       // 已有会话，复用
       if (sessionId && this.transports[sessionId]) {
         transport = this.transports[sessionId];
-        await transport.handleRequest(req, res, req.body);
+        // 设置请求上下文
+        if (currentAccessToken) {
+          const requestContext = {
+            userId,
+            accessToken: currentAccessToken,
+            userName: getUserName(req),
+            sessionId,
+            clientId: req.user?.client_id,
+          };
+          setRequestContext(sessionId, requestContext);
+          console.log(`[TOOL_CALL] Set request context for tool execution - User: ${userId}, Token: ${currentAccessToken.substring(0, 20)}...`);
+        } else {
+          console.warn(`[TOOL_CALL] ⚠️ No access token found in current request for user: ${userId}`);
+        }
+        try {
+          await transport.handleRequest(req, res, req.body);
+        } finally {
+          if (currentAccessToken) {
+            setTimeout(() => clearRequestContext(sessionId), 1000);
+          }
+        }
         return;
       }
       // 新会话初始化
