@@ -110,46 +110,52 @@ export class ServerRoutes {
       this.oauthServer.handleToken(req, res);
     });
 
+    // 新增Lark OAuth回调路由
+    this.app.get('/auth/callback', (req: Request, res: Response) => {
+      const { code, state } = req.query;
+      if (!code || !state) {
+        res.status(400).json({
+          error: 'invalid_request',
+          error_description: 'Missing code or state'
+        });
+        return;
+      }
+      try {
+        // 解析state，获取client_redirect_uri和client_state
+        let stateObj;
+        try {
+          stateObj = JSON.parse(Buffer.from(state as string, 'base64').toString());
+        } catch (e) {
+          res.status(400).json({ error: 'invalid_state', error_description: 'Failed to decode state' });
+          return;
+        }
+        const clientRedirectUri = stateObj.client_redirect_uri;
+        const clientState = stateObj.client_state;
+        if (!clientRedirectUri) {
+          res.status(400).json({ error: 'invalid_request', error_description: 'Missing client_redirect_uri in state' });
+          return;
+        }
+        // 拼接code、state（用clientState）
+        let finalUrl = clientRedirectUri;
+        if (finalUrl.includes('?')) {
+          finalUrl += `&code=${encodeURIComponent(code as string)}&state=${encodeURIComponent(clientState || '')}`;
+        } else {
+          finalUrl += `?code=${encodeURIComponent(code as string)}&state=${encodeURIComponent(clientState || '')}`;
+        }
+        console.log(`[OAUTH] /auth/callback: code/state received, redirecting to`, finalUrl);
+        res.redirect(finalUrl);
+      } catch (err) {
+        console.error('[OAUTH] /auth/callback redirect error:', err);
+        res.status(500).json({ error: 'redirect_error', error_description: String(err) });
+      }
+    });
+
     // Handle CORS preflight requests for SSE endpoint
-    this.app.options('/sse', (req: Request, res: Response) => {
-      const corsContext: LogContext = {
-        component: 'ServerRoutes',
-        operation: 'corsPreflightSSE',
-        ip: req.ip
-      };
-
-      Logger.debug('CORS preflight for SSE endpoint', corsContext);
-      res.header('Access-Control-Allow-Origin', '*');
-      res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, MCP-Protocol-Version');
-      res.header('Access-Control-Allow-Credentials', 'true');
-      res.sendStatus(200);
-    });
-
-    // MCP SSE 端点 - 只支持 GET 用于建立SSE连接
-    this.app.get('/sse', 
-      this.authMiddleware.authenticateToken.bind(this.authMiddleware), 
-      this.sseHandler.handleSSEConnection.bind(this.sseHandler)
-    );
-
-    // 处理错误的 POST /sse 请求，返回有用的错误信息
-    this.app.post('/sse', (req: Request, res: Response) => {
-      const errorContext: LogContext = {
-        component: 'ServerRoutes',
-        operation: 'incorrectSSEPost',
-        ip: req.ip
-      };
-
-      Logger.warn('Incorrect POST request to SSE endpoint', errorContext);
-      this.sseHandler.handleIncorrectSSEPost(req, res);
-    });
-
-    // MCP Messages 端点 - 只支持 POST 用于发送消息
-    // 使用轻量级会话验证，避免每次都调用 Lark API
-    this.app.post('/messages', 
-      this.authMiddleware.authenticateSession.bind(this.authMiddleware), 
-      this.sseHandler.handlePostMessage.bind(this.sseHandler)
-    );
+    // this.app.options('/sse', ...)
+    // this.app.get('/sse', ...)
+    // this.app.post('/sse', ...)
+    // this.app.post('/messages', ...)
+    // 只保留健康检查、OAuth等路由，MCP主路由由server-lark.ts直接注册
 
     Logger.info('All server routes configured successfully', {
       ...context,

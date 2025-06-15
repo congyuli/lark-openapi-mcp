@@ -4,7 +4,7 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 import { Command } from 'commander';
 import { currentVersion } from './utils/version';
-import { initStdioServer, initSSEServer, initMcpServer } from './mcp-server';
+import { initStdioServer, initMcpServer } from './mcp-server';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { RecallTool } from './mcp-tool/document-tool/recall';
 import { OAPI_MCP_DEFAULT_ARGS, OAPI_MCP_ENV_ARGS } from './utils/constants';
@@ -26,7 +26,7 @@ program
   .option('-l, --language <language>', 'Tools Language, zh or en (default: "en")')
   .option('-u, --user-access-token <userAccessToken>', 'User Access Token (beta)')
   .option('--token-mode <tokenMode>', 'Token Mode, auto or user_access_token or tenant_access_token (default: "auto")')
-  .option('-m, --mode <mode>', 'Transport Mode, stdio or sse (default: "stdio")')
+  .option('-m, --mode <mode>', 'Transport Mode, stdio or streamable (default: "stdio")')
   .option('--host <host>', 'Host to listen (default: "localhost")')
   .option('-p, --port <port>', 'Port to listen in sse mode (default: "3000")')
   .option('--config <configPath>', 'Config file path (JSON)')
@@ -62,10 +62,10 @@ program
     const { mcpServer, larkClient } = initMcpServer(finalOptions);
     if (finalOptions.mode === 'stdio') {
       initStdioServer(mcpServer);
-    } else if (finalOptions.mode === 'sse') {
+    } else if (finalOptions.mode === 'streamable') {
       // 传递 larkClient 到 server-lark.ts，以便动态更新用户 token
-      const { initSSEServer } = await import('./mcp-server/server-lark');
-      initSSEServer(mcpServer, finalOptions, larkClient);
+      const mod = await import('./mcp-server/server-lark');
+      (mod.initStreamableServer || mod.default)(mcpServer, finalOptions, larkClient);
     } else {
       console.error('Invalid mode:', finalOptions.mode);
       process.exit(1);
@@ -76,10 +76,10 @@ program
   .command('recall-developer-documents')
   .description('Start Feishu/Lark Open Platform Recall MCP Service')
   .option('-d, --domain <domain>', 'Feishu Open Platform Domain', 'https://open.feishu.cn')
-  .option('-m, --mode <mode>', 'Transport Mode, stdio or sse', 'stdio')
+  .option('-m, --mode <mode>', 'Transport Mode, stdio or streamable', 'stdio')
   .option('--host <host>', 'Host to listen', 'localhost')
   .option('-p, --port <port>', 'Port to listen in sse mode', '3001')
-  .action((options) => {
+  .action(async (options) => {
     const server = new McpServer({
       id: 'lark-recall-mcp-server',
       name: 'Lark Recall MCP Service',
@@ -90,8 +90,9 @@ program
     );
     if (options.mode === 'stdio') {
       initStdioServer(server);
-    } else if (options.mode === 'sse') {
-      initSSEServer(server, options);
+    } else if (options.mode === 'streamable') {
+      const mod = await import('./mcp-server/server-lark');
+      (mod.initStreamableServer || mod.default)(server, options);
     } else {
       console.error('Invalid mode:', options.mode);
       process.exit(1);

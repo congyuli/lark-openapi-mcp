@@ -10,6 +10,7 @@ import { SSEHandler } from './handlers/sse-handler';
 import { ServerRoutes } from './routes/server-routes';
 import { setGlobalUserManager } from '../mcp-tool/utils/handler';
 import { Logger, LogContext, PerformanceMonitor } from './shared/logger';
+import { StreamableHTTPHandler } from './handlers/streamable-http-handler';
 
 // Check environment variables on startup
 const envCheck = checkRequiredEnvVars();
@@ -23,16 +24,16 @@ if (!envCheck.isValid) {
   process.exit(1);
 }
 
-// 导出初始化函数，用于替代 sse.ts
-export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, larkClient?: any): void {
+// 导出初始化函数，用于streamable http
+export function initStreamableServer(mcpServer: McpServer, options: McpServerOptions, larkClient?: any): void {
   const context: LogContext = {
-    component: 'SSEServer',
-    operation: 'initSSEServer',
+    component: 'StreamableHTTPServer',
+    operation: 'initStreamableServer',
     port: options.port || 3000,
     host: options.host || 'localhost'
   };
 
-  Logger.info('Initializing SSE Server', context);
+  Logger.info('Initializing Streamable HTTP Server', context);
 
   const app = express();
   const PORT = options.port || 3000;
@@ -41,7 +42,7 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
   // 创建UserManager实例，改进LarkClient创建逻辑
   const userManager = new UserManager(async (accessToken: string) => {
     const userContext: LogContext = {
-      component: 'SSEServer',
+      component: 'StreamableHTTPServer',
       operation: 'createUserLarkClient',
       userAccessTokenPrefix: accessToken.substring(0, 20)
     };
@@ -110,18 +111,17 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
   // 创建各个模块实例
   const oauthServer = new OAuthServer();
   const authMiddleware = new AuthMiddleware(userManager);
-  const sseHandler = new SSEHandler(mcpServer, userManager, PORT);
-  const serverRoutes = new ServerRoutes(app, oauthServer, authMiddleware, sseHandler, PORT, userManager);
+  const streamableHandler = new StreamableHTTPHandler(mcpServer, userManager, PORT);
+  const serverRoutes = new ServerRoutes(app, oauthServer, authMiddleware, undefined as any, PORT, userManager);
 
   Logger.info('Server modules initialized', {
     ...context,
-    modules: ['UserManager', 'OAuthServer', 'AuthMiddleware', 'SSEHandler', 'ServerRoutes']
+    modules: ['UserManager', 'OAuthServer', 'AuthMiddleware', 'StreamableHTTPHandler', 'ServerRoutes']
   });
 
-  // 优雅关闭处理
   process.on('SIGTERM', async () => {
     Logger.info('Received SIGTERM, starting graceful shutdown', {
-      component: 'SSEServer',
+      component: 'StreamableHTTPServer',
       signal: 'SIGTERM'
     });
     await userManager.shutdown();
@@ -130,56 +130,54 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
 
   process.on('SIGINT', async () => {
     Logger.info('Received SIGINT, starting graceful shutdown', {
-      component: 'SSEServer', 
+      component: 'StreamableHTTPServer',
       signal: 'SIGINT'
     });
     await userManager.shutdown();
     process.exit(0);
   });
 
-  // Enable CORS for all routes
   app.use(
     cors({
       origin: '*',
       credentials: true,
-      methods: ['GET', 'POST', 'OPTIONS'],
-      allowedHeaders: ['Authorization', 'Content-Type', 'MCP-Protocol-Version'],
+      methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Authorization', 'Content-Type', 'MCP-Protocol-Version', 'mcp-session-id'],
     }),
   );
-
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
-  // 添加请求日志中间件
   app.use((req, res, next) => {
     const requestContext: LogContext = {
-      component: 'SSEServer',
+      component: 'StreamableHTTPServer',
       operation: 'httpRequest',
       method: req.method,
       path: req.path,
       userAgent: req.get('User-Agent'),
       ip: req.ip
     };
-
     Logger.info(`HTTP ${req.method} ${req.path}`, requestContext);
-    
     if (Object.keys(req.query).length > 0) {
       Logger.debug('Request query parameters', {
         ...requestContext,
         query: req.query
       });
     }
-    
     next();
   });
 
-  // 设置所有路由
+  // 设置所有非MCP路由（如健康检查、OAuth等）
   serverRoutes.setupRoutes();
+
+  // MCP主路由
+  app.post('/mcp', authMiddleware.authenticateToken.bind(authMiddleware), streamableHandler.handlePost.bind(streamableHandler));
+  app.get('/mcp', authMiddleware.authenticateToken.bind(authMiddleware), streamableHandler.handleGet.bind(streamableHandler));
+  app.delete('/mcp', authMiddleware.authenticateToken.bind(authMiddleware), streamableHandler.handleDelete.bind(streamableHandler));
 
   // 初始化性能监控
   const performanceMonitor = PerformanceMonitor.getInstance();
 
-  // 调试信息
   Logger.debug('Server initialization complete', {
     ...context,
     mcpServerAvailable: !!mcpServer,
@@ -187,16 +185,13 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
     hasUpdateUserAccessToken: !!(larkClient && larkClient.updateUserAccessToken)
   });
 
-  // 尝试获取 MCP server 的内部状态（如果可能）
   if (mcpServer) {
     try {
-      // 检查 server 的注册状态
       const serverInternal = mcpServer as any;
       const toolCount = Object.keys(serverInternal._registeredTools || {}).length;
       const resourceCount = Object.keys(serverInternal._registeredResources || {}).length;
-      
       Logger.info('MCP Server status inspection', {
-        component: 'SSEServer',
+        component: 'StreamableHTTPServer',
         mcpServer: {
           registeredTools: toolCount,
           registeredResources: resourceCount,
@@ -205,33 +200,29 @@ export function initSSEServer(mcpServer: McpServer, options: McpServerOptions, l
       });
     } catch (error) {
       Logger.debug('Could not inspect MCP server internals', {
-        component: 'SSEServer',
+        component: 'StreamableHTTPServer',
         error: (error as Error).message
       });
     }
   }
 
-  // 启动服务器
   app.listen(PORT, host, () => {
-    Logger.info('SSE Server started successfully', {
+    Logger.info('Streamable HTTP Server started successfully', {
       ...context,
       url: `${host}:${PORT}`,
       environment: process.env.NODE_ENV || 'development'
     });
-    
     serverRoutes.logEndpoints(host);
-    
-    // 设置全局 UserManager 引用，让工具执行时能获取用户专属的 LarkClient
     Logger.debug('Setting global UserManager reference for tool execution', {
-      component: 'SSEServer',
+      component: 'StreamableHTTPServer',
       operation: 'setGlobalUserManager'
     });
     setGlobalUserManager(userManager);
-
-    // 开始性能监控
     Logger.info('Performance monitoring started', {
-      component: 'SSEServer',
+      component: 'StreamableHTTPServer',
       operation: 'startPerformanceMonitoring'
     });
   });
 }
+
+export default initStreamableServer;

@@ -59,103 +59,66 @@ export class OAuthServer {
     
     const { client_id, redirect_uri, code_challenge, response_type, state, scope } = req.query;
 
+    // 1. 打印客户端传递的redirect_uri
+    console.log(`[DEBUG] Client provided redirect_uri (raw):`, redirect_uri);
+    const decodedRedirectUri = decodeURIComponent(redirect_uri as string);
+    console.log(`[DEBUG] Client provided redirect_uri (decoded):`, decodedRedirectUri);
+
     console.log(`[DEBUG] Authorization request from mcp-remote:`);
     console.log(`  - client_id: ${client_id}`);
     console.log(`  - redirect_uri: ${redirect_uri}`);
     console.log(`  - state: ${state}`);
 
-    // Validate redirect_uri format before processing
-    const decodedRedirectUri = decodeURIComponent(redirect_uri as string);
-    console.log(`[DEBUG] Decoded redirect_uri: ${decodedRedirectUri}`);
-
-    // Predefined allowed redirect_uri patterns
-    const allowedRedirectPatterns = [
-      /^http:\/\/localhost:\d+\/oauth\/callback$/, // localhost with any port, /oauth/callback path
-      /^http:\/\/127\.0\.0\.1:\d+\/oauth\/callback$/, // 127.0.0.1 with any port, /oauth/callback path
-      /^http:\/\/localhost:\d+\/callback$/, // localhost with any port, /callback path
-      /^https:\/\/[\w\-\.]+\.[\w]+\/oauth\/callback$/, // HTTPS domains for production (optional)
-    ];
-
-    // Check if redirect_uri matches any allowed pattern
-    const isValidRedirectUri = allowedRedirectPatterns.some((pattern) => pattern.test(decodedRedirectUri));
-
-    if (!isValidRedirectUri) {
-      console.error(`[ERROR] Invalid redirect_uri format: ${decodedRedirectUri}`);
-      console.error(`[ERROR] Allowed patterns:`);
-      console.error(`  - http://localhost:[port]/oauth/callback`);
-      console.error(`  - http://127.0.0.1:[port]/oauth/callback`);
-      console.error(`  - http://localhost:[port]/callback`);
+    if (!redirect_uri) {
       res.status(400).json({
         error: 'invalid_redirect_uri',
-        error_description: 'Redirect URI does not match allowed patterns',
+        error_description: 'Missing redirect_uri',
       });
       return;
     }
 
-    console.log(`[DEBUG] ✅ redirect_uri format validation passed`);
-
     if (!this.clients.has(client_id as string)) {
       console.log(`[WARNING] Client not found: ${client_id}, auto-registering for development`);
-
-      // Auto-register the client for development/testing purposes
       const clientInfo: OAuthClientInfo = {
         client_id: client_id as string,
         client_name: 'Auto-registered MCP Client',
         redirect_uris: [
           'http://localhost:3334/callback',
-          decodedRedirectUri, // Use already decoded redirect_uri
+          decodedRedirectUri,
         ],
         grant_types: ['authorization_code', 'refresh_token'],
         response_types: ['code'],
-        token_endpoint_auth_method: 'none', // Public client
+        token_endpoint_auth_method: 'none',
       };
-
       this.clients.set(client_id as string, clientInfo);
       console.log(`[INFO] Auto-registered client: ${client_id}`);
     }
 
-    // Use mcp-remote's redirect_uri (this is where Lark should redirect after authorization)
-    const mcpRedirectUri = decodedRedirectUri;
+    // 2. Lark Server的redirect_uri固定为MCP Server自己的/auth/callback
+    const mcpCallbackBase = `${req.protocol}://${req.get('host')}/auth/callback`;
+    console.log(`[DEBUG] MCP Server callback redirect_uri for Lark:`, mcpCallbackBase);
 
-    // Validate that the mcp-remote's redirect_uri is allowed
-    const client = this.clients.get(client_id as string);
-    if (!client?.redirect_uris.includes(mcpRedirectUri)) {
-      console.log(`[ERROR] Invalid redirect_uri: ${mcpRedirectUri} for client: ${client_id}`);
-      console.log(`[DEBUG] Allowed redirect_uris:`, client?.redirect_uris);
-      res.status(400).json({ error: 'invalid_redirect_uri' });
-      return;
-    }
-
-    // Ensure state is not undefined
-    const authState = (state as string) || crypto.randomUUID();
-
-    console.log(`[DEBUG] Constructing Lark authorization URL...`);
-    console.log(`[DEBUG] Using mcp-remote redirect_uri: ${mcpRedirectUri}`);
-    console.log(`[DEBUG] Using state: ${authState}`);
+    // 3. 客户端redirect_uri通过state传递
+    const stateObj = {
+      client_state: state,
+      client_redirect_uri: decodedRedirectUri
+    };
+    const encodedState = Buffer.from(JSON.stringify(stateObj)).toString('base64');
 
     try {
-      const larkScopes = larkConfig.scopes.length > 0 ? larkConfig.scopes.join(' ') : 'contact:user.id:readonly'; // Use minimal scope for testing
-
-      // Construct Lark's actual authorization URL
-      // Use mcp-remote's redirect_uri so Lark redirects directly to mcp-remote
+      const larkScopes = larkConfig.scopes.length > 0 ? larkConfig.scopes.join(' ') : 'contact:user.id:readonly';
       const larkAuthUrl = this.larkOAuthClient.getAuthorizationUrl({
-        redirect_uri: mcpRedirectUri, // Use mcp-remote's redirect URI
-        state: authState, // Ensure state is not undefined
-        scope: larkScopes, // Use scope from config
+        redirect_uri: mcpCallbackBase,
+        state: encodedState,
+        scope: larkScopes,
       });
-
       console.log(`[DEBUG] Redirecting to Lark authorization URL:`);
       console.log(`  - URL: ${larkAuthUrl}`);
-      console.log(`  - This will redirect user to Lark for actual authorization`);
-      console.log(`  - After user approval, Lark will redirect to: ${mcpRedirectUri}`);
-
-      // Redirect user's browser to Lark's authorization page
+      console.log(`  - After user approval, Lark will redirect to: ${mcpCallbackBase}`);
       res.redirect(larkAuthUrl);
     } catch (error) {
       console.error('[ERROR] Failed to construct Lark authorization URL:', error);
-      res
-        .status(500)
-        .json({ error: 'internal_server_error', error_description: 'Failed to construct authorization URL' });
+      res.status(500).json({ error: 'internal_server_error', error_description: 'Failed to construct authorization URL' });
     }
   }
 
