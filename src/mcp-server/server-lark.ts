@@ -171,9 +171,9 @@ export function initStreamableServer(mcpServer: McpServer, options: McpServerOpt
   serverRoutes.setupRoutes();
 
   // MCP主路由
-  app.post('/mcp', authMiddleware.authenticateToken.bind(authMiddleware), streamableHandler.handlePost.bind(streamableHandler));
-  app.get('/mcp', authMiddleware.authenticateToken.bind(authMiddleware), streamableHandler.handleGet.bind(streamableHandler));
-  app.delete('/mcp', authMiddleware.authenticateToken.bind(authMiddleware), streamableHandler.handleDelete.bind(streamableHandler));
+  app.post('/mcp', authMiddleware.authenticateSession.bind(authMiddleware), streamableHandler.handlePost.bind(streamableHandler));
+  app.get('/mcp', authMiddleware.authenticateSession.bind(authMiddleware), streamableHandler.handleGet.bind(streamableHandler));
+  app.delete('/mcp', authMiddleware.authenticateSession.bind(authMiddleware), streamableHandler.handleDelete.bind(streamableHandler));
 
   // 初始化性能监控
   const performanceMonitor = PerformanceMonitor.getInstance();
