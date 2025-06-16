@@ -5,6 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { UserManager } from '../user-manager';
 import { requireUserId, getUserName, getUserAccessToken } from '../user-manager';
 import { setRequestContext, clearRequestContext } from '../../mcp-tool/utils/handler';
+import { Logger } from '../shared/logger';
 
 // 会话ID头部
 const SESSION_ID_HEADER = 'mcp-session-id';
@@ -20,19 +21,27 @@ export class StreamableHTTPHandler {
 
   // 处理POST /mcp
   async handlePost(req: Request, res: Response): Promise<void> {
-    // [TOOL_CALL] 打印请求头和关键认证信息
-    console.info('[TOOL_CALL] Incoming /mcp POST request');
-    console.info('[TOOL_CALL] Request headers:', JSON.stringify(req.headers, null, 2));
-    console.info('[TOOL_CALL] Authorization header:', req.headers.authorization || 'NOT_FOUND');
-    console.info('[TOOL_CALL] req.user:', req.user || 'NOT_FOUND');
+    const startTime = Date.now();
     const sessionId = req.headers[SESSION_ID_HEADER] as string | undefined;
-    let transport: StreamableHTTPServerTransport;
-    const userId = requireUserId(req);
-    const currentAccessToken = getUserAccessToken(req);
-    console.info('[TOOL_CALL] userId:', userId);
-    console.info('[TOOL_CALL] accessToken:', currentAccessToken ? (currentAccessToken.substring(0, 20) + '...') : 'NOT_FOUND');
-
+    const userId = req.user?.lark_user_id;
+    const clientId = req.user?.client_id;
+    Logger.info('[MCP][Request]', {
+      method: req.method,
+      path: req.path,
+      userId,
+      clientId,
+      sessionId,
+      userAgent: req.get('User-Agent')
+    });
+    let status = 200;
     try {
+      // [TOOL_CALL] 打印请求头和关键认证信息
+      console.info('[TOOL_CALL] Authorization header:', req.headers.authorization?.substring(0, 8) + '...');
+      let transport: StreamableHTTPServerTransport;
+      const userId = requireUserId(req);
+      const currentAccessToken = getUserAccessToken(req);
+      console.info('[TOOL_CALL] userId:', userId);
+
       // 已有会话，复用
       if (sessionId && this.transports[sessionId]) {
         transport = this.transports[sessionId];
@@ -46,7 +55,7 @@ export class StreamableHTTPHandler {
             clientId: req.user?.client_id,
           };
           setRequestContext(sessionId, requestContext);
-          console.log(`[TOOL_CALL] Set request context for tool execution - User: ${userId}, Token: ${currentAccessToken.substring(0, 20)}...`);
+          console.log(`[TOOL_CALL] Set request context for tool execution - User: ${userId}`);
         } else {
           console.warn(`[TOOL_CALL] ⚠️ No access token found in current request for user: ${userId}`);
         }
@@ -82,7 +91,8 @@ export class StreamableHTTPHandler {
         id: null,
       });
     } catch (error) {
-      console.error('[ERROR] StreamableHTTPHandler POST error:', error);
+      status = 500;
+      Logger.error('[MCP][Error]', error as Error, { method: req.method, path: req.path, userId, clientId, sessionId });
       if (!res.headersSent) {
         res.status(500).json({
           jsonrpc: '2.0',
@@ -93,49 +103,136 @@ export class StreamableHTTPHandler {
           id: null,
         });
       }
+    } finally {
+      const durationMs = Date.now() - startTime;
+      Logger.info('[MCP][Response]', {
+        method: req.method,
+        path: req.path,
+        userId,
+        clientId,
+        sessionId,
+        status: res.statusCode || status,
+        durationMs
+      });
     }
   }
 
   // 处理GET /mcp（SSE流/通知）
   async handleGet(req: Request, res: Response): Promise<void> {
+    const startTime = Date.now();
     const sessionId = req.headers[SESSION_ID_HEADER] as string | undefined;
-    if (!sessionId || !this.transports[sessionId]) {
-      res.status(400).json({
-        jsonrpc: '2.0',
-        error: {
-          code: -32000,
-          message: 'Invalid or missing session ID',
-        },
-        id: null,
+    const userId = req.user?.lark_user_id;
+    const clientId = req.user?.client_id;
+    Logger.info('[MCP][Request]', {
+      method: req.method,
+      path: req.path,
+      userId,
+      clientId,
+      sessionId,
+      userAgent: req.get('User-Agent')
+    });
+    let status = 200;
+    try {
+      if (!sessionId || !this.transports[sessionId]) {
+        res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Invalid or missing session ID',
+          },
+          id: null,
+        });
+        return;
+      }
+      const transport = this.transports[sessionId];
+      await transport.handleRequest(req, res);
+    } catch (error) {
+      status = 500;
+      Logger.error('[MCP][Error]', error as Error, { method: req.method, path: req.path, userId, clientId, sessionId });
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32603,
+            message: 'Internal server error',
+          },
+          id: null,
+        });
+      }
+    } finally {
+      const durationMs = Date.now() - startTime;
+      Logger.info('[MCP][Response]', {
+        method: req.method,
+        path: req.path,
+        userId,
+        clientId,
+        sessionId,
+        status: res.statusCode || status,
+        durationMs
       });
-      return;
     }
-    const transport = this.transports[sessionId];
-    await transport.handleRequest(req, res);
   }
 
   // 处理DELETE /mcp（会话终止）
   async handleDelete(req: Request, res: Response): Promise<void> {
+    const startTime = Date.now();
     const sessionId = req.headers[SESSION_ID_HEADER] as string | undefined;
-    if (!sessionId || !this.transports[sessionId]) {
-      res.status(400).json({
+    const userId = req.user?.lark_user_id;
+    const clientId = req.user?.client_id;
+    Logger.info('[MCP][Request]', {
+      method: req.method,
+      path: req.path,
+      userId,
+      clientId,
+      sessionId,
+      userAgent: req.get('User-Agent')
+    });
+    let status = 200;
+    try {
+      if (!sessionId || !this.transports[sessionId]) {
+        res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Invalid or missing session ID',
+          },
+          id: null,
+        });
+        return;
+      }
+      const transport = this.transports[sessionId];
+      transport.close();
+      delete this.transports[sessionId];
+      res.status(200).json({
         jsonrpc: '2.0',
-        error: {
-          code: -32000,
-          message: 'Invalid or missing session ID',
-        },
+        result: 'Session terminated',
         id: null,
       });
-      return;
+    } catch (error) {
+      status = 500;
+      Logger.error('[MCP][Error]', error as Error, { method: req.method, path: req.path, userId, clientId, sessionId });
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32603,
+            message: 'Internal server error',
+          },
+          id: null,
+        });
+      }
+    } finally {
+      const durationMs = Date.now() - startTime;
+      Logger.info('[MCP][Response]', {
+        method: req.method,
+        path: req.path,
+        userId,
+        clientId,
+        sessionId,
+        status: res.statusCode || status,
+        durationMs
+      });
     }
-    const transport = this.transports[sessionId];
-    transport.close();
-    delete this.transports[sessionId];
-    res.status(200).json({
-      jsonrpc: '2.0',
-      result: 'Session terminated',
-      id: null,
-    });
   }
 
   // 判断是否为初始化请求

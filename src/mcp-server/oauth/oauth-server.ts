@@ -94,8 +94,8 @@ export class OAuthServer {
       console.log(`[INFO] Auto-registered client: ${client_id}`);
     }
 
-    // 2. Lark Server的redirect_uri固定为MCP Server自己的/auth/callback
-    const mcpCallbackBase = `${req.protocol}://${req.get('host')}/auth/callback`;
+    // 2. Lark Server的redirect_uri固定为MCP Server自己的/oauth/callback
+    const mcpCallbackBase = `${req.protocol}://${req.get('host')}/oauth/callback`;
     console.log(`[DEBUG] MCP Server callback redirect_uri for Lark:`, mcpCallbackBase);
 
     // 3. 客户端redirect_uri通过state传递

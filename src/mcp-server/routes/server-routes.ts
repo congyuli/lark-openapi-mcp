@@ -111,7 +111,7 @@ export class ServerRoutes {
     });
 
     // 新增Lark OAuth回调路由
-    this.app.get('/auth/callback', (req: Request, res: Response) => {
+    this.app.get('/oauth/callback', (req: Request, res: Response) => {
       const { code, state } = req.query;
       if (!code || !state) {
         res.status(400).json({
@@ -142,10 +142,10 @@ export class ServerRoutes {
         } else {
           finalUrl += `?code=${encodeURIComponent(code as string)}&state=${encodeURIComponent(clientState || '')}`;
         }
-        console.log(`[OAUTH] /auth/callback: code/state received, redirecting to`, finalUrl);
+        console.log(`[OAUTH] /oauth/callback: code/state received, redirecting to`, finalUrl);
         res.redirect(finalUrl);
       } catch (err) {
-        console.error('[OAUTH] /auth/callback redirect error:', err);
+        console.error('[OAUTH] /oauth/callback redirect error:', err);
         res.status(500).json({ error: 'redirect_error', error_description: String(err) });
       }
     });
@@ -181,11 +181,11 @@ export class ServerRoutes {
           `http://${host}:${this.port}/.well-known/oauth-authorization-server`,
           `http://${host}:${this.port}/register`,
           `http://${host}:${this.port}/authorize`,
-          `http://${host}:${this.port}/token`
+          `http://${host}:${this.port}/token`,
+          `http://${host}:${this.port}/oauth/callback`
         ],
         mcp: [
-          `http://${host}:${this.port}/sse`,
-          `http://${host}:${this.port}/messages`
+          `http://${host}:${this.port}/mcp`
         ],
         monitoring: [
           `http://${host}:${this.port}/health`,
@@ -197,22 +197,5 @@ export class ServerRoutes {
         ]
       }
     });
-
-    // 保留控制台输出用于开发环境的快速查看
-    console.log(`[SERVER] Starting MCP SSE Server with OAuth on ${host}:${this.port}`);
-    console.log(`OAuth endpoints:`);
-    console.log(`  - Metadata: GET http://${host}:${this.port}/.well-known/oauth-authorization-server`);
-    console.log(`  - Register: POST http://${host}:${this.port}/register`);
-    console.log(`  - Authorize: GET http://${host}:${this.port}/authorize`);
-    console.log(`  - Token: POST http://${host}:${this.port}/token`);
-    console.log(`MCP endpoints:`);
-    console.log(`  - SSE Connection: GET http://${host}:${this.port}/sse`);
-    console.log(`  - Messages: POST http://${host}:${this.port}/messages`);
-    console.log(`Health & Monitoring endpoints:`);
-    console.log(`  - Health: GET http://${host}:${this.port}/health`);
-    console.log(`  - Status: GET http://${host}:${this.port}/api/status`);
-    console.log(`  - Metrics: GET http://${host}:${this.port}/api/metrics`);
-    console.log(`  - User Stats: GET http://${host}:${this.port}/api/stats/users`);
-    console.log(`  - System Info: GET http://${host}:${this.port}/api/info`);
   }
 } 
