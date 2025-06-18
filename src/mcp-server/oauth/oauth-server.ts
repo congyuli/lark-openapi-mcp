@@ -12,9 +12,14 @@ export class OAuthServer {
     this.larkOAuthClient = new LarkOAuthClient(larkConfig);
   }
 
+  // 获取基础URL，优先使用环境变量
+  private getBaseUrl(req: Request): string {
+    return process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`;
+  }
+
   // OAuth Server Metadata Discovery (RFC 8414)
   getServerMetadata(req: Request): any {
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const baseUrl = this.getBaseUrl(req);
     
     return {
       issuer: baseUrl,
@@ -95,8 +100,9 @@ export class OAuthServer {
     }
 
     // 2. Lark Server的redirect_uri固定为MCP Server自己的/oauth/callback
-    const mcpCallbackBase = `${req.protocol}://${req.get('host')}/oauth/callback`;
+    const mcpCallbackBase = `${this.getBaseUrl(req)}/oauth/callback`;
     console.log(`[DEBUG] MCP Server callback redirect_uri for Lark:`, mcpCallbackBase);
+    console.log(`[DEBUG] Using PUBLIC_BASE_URL:`, process.env.PUBLIC_BASE_URL || 'not set');
 
     // 3. 客户端redirect_uri通过state传递
     const stateObj = {
